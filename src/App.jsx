@@ -34,7 +34,7 @@ const FONT = {
 
 const CATEGORIES = ["Habit", "Contested", "Planned Not Taken"];
 const CAT_COLORS = { Habit: COLOR.inkL, Contested: COLOR.gold, "Planned Not Taken": COLOR.red };
-const SKEY = { wagers: "atdu-w", ledger: "atdu-l" };
+const SKEY = { wagers: "atdu-w", ledger: "atdu-l", today: "atdu-t" };
 
 const S = {
   h2: { fontFamily: FONT.serif, fontSize: 24, fontWeight: 600, margin: "32px 0 16px", color: COLOR.ink },
@@ -268,6 +268,10 @@ function PracticeTab() {
         const l = await window.storage.get(SKEY.ledger);
         if (l?.value) setLedger(JSON.parse(l.value));
       } catch {}
+      try {
+        const t = await window.storage.get(SKEY.today);
+        if (t?.value) setTodayState(JSON.parse(t.value));
+      } catch {}
     })();
   }, []);
 
@@ -282,6 +286,17 @@ function PracticeTab() {
     setLedger(l);
     try {
       await window.storage.set(SKEY.ledger, JSON.stringify(l));
+    } catch {}
+  }, []);
+
+  const saveToday = useCallback(async (t) => {
+    setTodayState(t);
+    try {
+      if (t) {
+        await window.storage.set(SKEY.today, JSON.stringify(t));
+      } else {
+        await window.storage.delete(SKEY.today);
+      }
     } catch {}
   }, []);
 
@@ -382,16 +397,16 @@ function PracticeTab() {
         saveL([...ledger, entry]);
       }
 
-      setTodayState(buildFlippedDay());
+      saveToday(buildFlippedDay());
       setFlipAnim(false);
     }, 500);
   };
 
   const setOutcome = (code, val) =>
-    setTodayState((prev) => ({
-      ...prev,
-      [code]: { ...prev[code], outcome: normalizeOutcome(val) },
-    }));
+    saveToday({
+      ...todayState,
+      [code]: { ...todayState[code], outcome: normalizeOutcome(val) },
+    });
 
   /* ── Add/Remove wagers mid-practice ── */
   const addWager = () => {
@@ -417,11 +432,9 @@ function PracticeTab() {
   const removeWager = (code) => {
     saveW(wagers.map((w) => (w.code === code ? { ...w, removed: true } : w)));
     if (todayState?.[code]) {
-      setTodayState((prev) => {
-        const next = { ...prev };
-        delete next[code];
-        return next;
-      });
+      const nextDayState = { ...todayState };
+      delete nextDayState[code];
+      saveToday(Object.keys(nextDayState).length ? nextDayState : null);
     }
   };
 
@@ -429,7 +442,7 @@ function PracticeTab() {
     setWagers(null);
     setLedger([]);
     setSetupMode(true);
-    setTodayState(null);
+    await saveToday(null);
     setAddingWager(false);
     setDrafts([{ code: "", name: "", plus: "", minus: "", category: "Habit" }]);
     try {
@@ -556,7 +569,10 @@ function PracticeTab() {
           </div>
         ) : (
           <div>
-            <p style={{ ...S.muted, margin: "0 0 20px" }}>Day {dayNumber}</p>
+            <p style={{ ...S.muted, margin: "0 0 8px" }}>Day {dayNumber}</p>
+            <p style={{ ...S.muted, margin: "0 0 20px", fontSize: 12 }}>
+              Flip results are already recorded for today (U/C and all constrained outcomes). Fill U outcomes before the next flip.
+            </p>
 
             <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
               {activeWagers.map((w) => {
