@@ -250,7 +250,6 @@ function PracticeTab() {
   const [setupMode, setSetupMode] = useState(true);
   const [drafts, setDrafts] = useState([{ code: "", name: "", plus: "", minus: "", category: "Habit" }]);
   const [todayState, setTodayState] = useState(null);
-  const [dayRecorded, setDayRecorded] = useState(false);
   const [flipAnim, setFlipAnim] = useState(false);
   const [addingWager, setAddingWager] = useState(false);
   const [newWager, setNewWager] = useState({ code: "", name: "", plus: "", minus: "", category: "Habit" });
@@ -348,27 +347,42 @@ function PracticeTab() {
   };
 
   /* ── Flip ── */
+  const buildFlippedDay = useCallback(() => {
+    const state = {};
+    activeWagers.forEach((w) => {
+      const flip1Heads = Math.random() < 0.5;
+      if (flip1Heads) {
+        state[w.code] = { mode: "U", outcome: null };
+      } else {
+        const flip2Heads = Math.random() < 0.5;
+        const invType = flip2Heads ? "last" : "lastC";
+        const ref = invType === "last" ? getLastEntry(w.code) : getLastC(w.code);
+        const refOutcome = ref ? normalizeOutcome(ref.outcome) : null;
+        const outcome = refOutcome ? invertOutcome(refOutcome) : categoryDefault(w);
+        state[w.code] = { mode: "C", outcome, invType };
+      }
+    });
+    return state;
+  }, [activeWagers, getLastC, getLastEntry]);
+
   const flipAll = () => {
+    const canAdvanceDay = !todayState || activeWagers.every((w) => todayState[w.code]?.outcome);
+    if (!canAdvanceDay) return;
+
     setFlipAnim(true);
-    setDayRecorded(false);
 
     setTimeout(() => {
-      const state = {};
-      activeWagers.forEach((w) => {
-        const flip1Heads = Math.random() < 0.5;
-        if (flip1Heads) {
-          state[w.code] = { mode: "U", outcome: null };
-        } else {
-          const flip2Heads = Math.random() < 0.5;
-          const invType = flip2Heads ? "last" : "lastC";
-          const ref = invType === "last" ? getLastEntry(w.code) : getLastC(w.code);
-          const refOutcome = ref ? normalizeOutcome(ref.outcome) : null;
-          const outcome = refOutcome ? invertOutcome(refOutcome) : categoryDefault(w);
-          state[w.code] = { mode: "C", outcome, invType };
-        }
-      });
+      if (todayState) {
+        const entry = { day: ledger.length + 1 };
+        activeWagers.forEach((w) => {
+          const ts = todayState[w.code];
+          entry[w.code] = { mode: ts.mode, outcome: normalizeOutcome(ts.outcome) };
+          if (ts.mode === "C" && ts.invType) entry[w.code].inv = ts.invType;
+        });
+        saveL([...ledger, entry]);
+      }
 
-      setTodayState(state);
+      setTodayState(buildFlippedDay());
       setFlipAnim(false);
     }, 500);
   };
@@ -378,20 +392,6 @@ function PracticeTab() {
       ...prev,
       [code]: { ...prev[code], outcome: normalizeOutcome(val) },
     }));
-
-  const recordDay = () => {
-    if (!activeWagers.every((w) => todayState?.[w.code]?.outcome)) return;
-
-    const entry = { day: ledger.length + 1 };
-    activeWagers.forEach((w) => {
-      const ts = todayState[w.code];
-      entry[w.code] = { mode: ts.mode, outcome: normalizeOutcome(ts.outcome) };
-      if (ts.mode === "C" && ts.invType) entry[w.code].inv = ts.invType;
-    });
-
-    saveL([...ledger, entry]);
-    setDayRecorded(true);
-  };
 
   /* ── Add/Remove wagers mid-practice ── */
   const addWager = () => {
@@ -430,7 +430,6 @@ function PracticeTab() {
     setLedger([]);
     setSetupMode(true);
     setTodayState(null);
-    setDayRecorded(false);
     setAddingWager(false);
     setDrafts([{ code: "", name: "", plus: "", minus: "", category: "Habit" }]);
     try {
@@ -539,26 +538,25 @@ function PracticeTab() {
 
   /* ── Active Practice View ── */
   const allFilled = todayState && activeWagers.every((w) => todayState[w.code]?.outcome);
+  const dayNumber = ledger.length + 1;
 
   return (
     <div style={{ maxWidth: 780, margin: "0 auto" }}>
       {/* Flip Card */}
       <div style={{ ...S.card, textAlign: "center", marginTop: 24 }}>
-        {!todayState || dayRecorded ? (
+        {!todayState ? (
           <div>
-            <p style={{ ...S.muted, margin: "0 0 16px" }}>
-              {dayRecorded ? `Day ${ledger.length} recorded.` : `Day ${ledger.length + 1} — ready to flip.`}
-            </p>
+            <p style={{ ...S.muted, margin: "0 0 16px" }}>{`Day ${dayNumber} — ready to flip.`}</p>
             <button
               onClick={flipAll}
               style={{ ...S.btn, background: COLOR.ink, color: COLOR.paper, fontSize: 16, padding: "14px 36px" }}
             >
-              {flipAnim ? "Flipping..." : dayRecorded ? "Flip Next Day" : "Flip"}
+              {flipAnim ? "Flipping..." : "Flip"}
             </button>
           </div>
         ) : (
           <div>
-            <p style={{ ...S.muted, margin: "0 0 20px" }}>Day {ledger.length + 1}</p>
+            <p style={{ ...S.muted, margin: "0 0 20px" }}>Day {dayNumber}</p>
 
             <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
               {activeWagers.map((w) => {
@@ -625,22 +623,24 @@ function PracticeTab() {
               })}
             </div>
 
-            <button
-              onClick={recordDay}
-              disabled={!allFilled}
-              style={{
-                ...S.btn,
-                marginTop: 20,
-                fontSize: 15,
-                padding: "12px 32px",
-                background: allFilled ? COLOR.ink : COLOR.border,
-                color: COLOR.paper,
-                opacity: allFilled ? 1 : 0.6,
-                cursor: allFilled ? "pointer" : "default",
-              }}
-            >
-              Record Day {ledger.length + 1}
-            </button>
+            <div style={{ marginTop: 20 }}>
+              <button
+                onClick={flipAll}
+                disabled={!allFilled || flipAnim}
+                style={{
+                  ...S.btn,
+                  fontSize: 15,
+                  padding: "12px 32px",
+                  background: allFilled ? COLOR.ink : COLOR.border,
+                  color: COLOR.paper,
+                  opacity: allFilled ? 1 : 0.6,
+                  cursor: allFilled ? "pointer" : "default",
+                }}
+              >
+                {flipAnim ? "Flipping..." : `Flip Next Day (records Day ${dayNumber})`}
+              </button>
+              {!allFilled && <p style={{ ...S.muted, marginTop: 10, marginBottom: 0 }}>Fill all U outcomes before flipping the next day.</p>}
+            </div>
           </div>
         )}
       </div>
