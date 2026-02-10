@@ -1,44 +1,46 @@
-# ATDU PWA (mobile-first)
+# ATDU PWA
 
-This is a Progressive Web App built with React + Vite.
-It works offline after the first load and stores data locally on your device.
+ATDU is a Progressive Web App built with React + Vite.
+It runs the ATDU rule system locally in the browser and stores wagers + ledger data on-device.
 
-## Mobile-only deployment (recommended: GitHub Pages + Actions)
+## Run locally
 
-### 1) Create a GitHub repo (Safari on iPhone)
-- Go to GitHub → **New repository**
-- Name: `atdu` (or anything)
-- Public
-- Create repository
+```bash
+npm install
+npm run dev
+```
 
-### 2) Upload this project
-GitHub does **not** unzip uploads automatically, so do this on iOS:
+## Access from phone and computer on the same network
 
-- Download **atdu-pwa.zip** to the Files app
-- Tap it to **unzip**
-- Open the folder → select **all files/folders inside** (index.html, src/, public/, package.json, etc.)
-- In Safari on GitHub: **Add file → Upload files**
-- Upload the selected items
-- Commit to `main`
+Use Vite host mode so other devices can reach your machine:
 
-(If selecting many files in iOS Safari is annoying, use the iOS app **Working Copy** instead; it makes this painless.)
+```bash
+npm run dev:host
+```
 
-### 3) Turn on GitHub Pages (Actions)
-- Repo → **Settings → Pages**
-- Source: **GitHub Actions**
+Then open the printed LAN URL on your phone (same Wi-Fi).
 
-Pushes to `main` will now build + deploy.
+## Production build
 
-### 4) Install on iOS as an “app”
-- Open your deployed URL in Safari
-- Share → **Add to Home Screen**
-- Launch ATDU from the Home Screen (standalone)
+```bash
+npm run build
+npm run preview:host
+```
 
-## Local use (no hosting)
-iOS Safari will not let a plain `file://` webpage act like a real offline PWA.
-If you want “local only”, you still need *some* localhost/server environment.
-Easiest practical path on iOS is: deploy to GitHub Pages once, then install to Home Screen.
+## Deploy (GitHub Pages)
 
-## Data
-All wagers + ledger are stored in your browser storage on that device.
-If you clear Safari website data, it will reset.
+1. Push this repo to GitHub.
+2. Configure Pages to deploy from GitHub Actions.
+3. Deploy the `dist/` output produced by `npm run build`.
+
+## Install as app (mobile + desktop)
+
+- **iOS Safari**: Share → **Add to Home Screen**.
+- **Android Chrome**: browser menu → **Install app**.
+- **Desktop Chrome/Edge**: use the install icon in the address bar.
+
+## Data behavior
+
+- Data is stored in browser storage on that device/profile.
+- Clearing site data resets wagers and ledger for that device.
+- If persistent local storage is unavailable, ATDU falls back to in-memory storage for the current session.
