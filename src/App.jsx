@@ -34,7 +34,7 @@ const FONT = {
 
 const CATEGORIES = ["Habit", "Contested", "Planned Not Taken"];
 const CAT_COLORS = { Habit: COLOR.inkL, Contested: COLOR.gold, "Planned Not Taken": COLOR.red };
-const SKEY = { wagers: "atdu-w", ledger: "atdu-l" };
+const SKEY = { wagers: "atdu-w", ledger: "atdu-l", today: "atdu-t" };
 
 const S = {
   h2: { fontFamily: FONT.serif, fontSize: 24, fontWeight: 600, margin: "32px 0 16px", color: COLOR.ink },
@@ -268,6 +268,13 @@ function PracticeTab() {
         const l = await window.storage.get(SKEY.ledger);
         if (l?.value) setLedger(JSON.parse(l.value));
       } catch {}
+      try {
+        const t = await window.storage.get(SKEY.today);
+        if (t?.value) {
+          const parsed = JSON.parse(t.value);
+          setTodayState(parsed?.day ? parsed : null);
+        }
+      } catch {}
     })();
   }, []);
 
@@ -282,6 +289,17 @@ function PracticeTab() {
     setLedger(l);
     try {
       await window.storage.set(SKEY.ledger, JSON.stringify(l));
+    } catch {}
+  }, []);
+
+  const saveToday = useCallback(async (t) => {
+    setTodayState(t);
+    try {
+      if (t) {
+        await window.storage.set(SKEY.today, JSON.stringify(t));
+      } else {
+        await window.storage.delete(SKEY.today);
+      }
     } catch {}
   }, []);
 
@@ -365,6 +383,20 @@ function PracticeTab() {
     return state;
   }, [activeWagers, getLastC, getLastEntry]);
 
+  const toLedgerEntry = useCallback(
+    (dayState) => {
+      const entry = { day: dayState.day };
+      activeWagers.forEach((w) => {
+        const ts = dayState[w.code];
+        if (!ts) return;
+        entry[w.code] = { mode: ts.mode, outcome: normalizeOutcome(ts.outcome) };
+        if (ts.mode === "C" && ts.invType) entry[w.code].inv = ts.invType;
+      });
+      return entry;
+    },
+    [activeWagers]
+  );
+
   const flipAll = () => {
     const canAdvanceDay = !todayState || activeWagers.every((w) => todayState[w.code]?.outcome);
     if (!canAdvanceDay) return;
@@ -372,26 +404,27 @@ function PracticeTab() {
     setFlipAnim(true);
 
     setTimeout(() => {
-      if (todayState) {
-        const entry = { day: ledger.length + 1 };
-        activeWagers.forEach((w) => {
-          const ts = todayState[w.code];
-          entry[w.code] = { mode: ts.mode, outcome: normalizeOutcome(ts.outcome) };
-          if (ts.mode === "C" && ts.invType) entry[w.code].inv = ts.invType;
-        });
-        saveL([...ledger, entry]);
-      }
-
-      setTodayState(buildFlippedDay());
+      const nextDay = (todayState?.day || ledger.length) + 1;
+      const nextState = { ...buildFlippedDay(), day: nextDay };
+      const nextEntry = toLedgerEntry(nextState);
+      saveL([...ledger, nextEntry]);
+      saveToday(nextState);
       setFlipAnim(false);
     }, 500);
   };
 
-  const setOutcome = (code, val) =>
-    setTodayState((prev) => ({
-      ...prev,
-      [code]: { ...prev[code], outcome: normalizeOutcome(val) },
-    }));
+  const setOutcome = (code, val) => {
+    const nextState = {
+      ...todayState,
+      [code]: { ...todayState[code], outcome: normalizeOutcome(val) },
+    };
+
+    saveToday(nextState);
+
+    const nextEntry = toLedgerEntry(nextState);
+    const hasDay = ledger.some((d) => d.day === nextEntry.day);
+    saveL(hasDay ? ledger.map((d) => (d.day === nextEntry.day ? nextEntry : d)) : [...ledger, nextEntry]);
+  };
 
   /* ── Add/Remove wagers mid-practice ── */
   const addWager = () => {
@@ -417,11 +450,9 @@ function PracticeTab() {
   const removeWager = (code) => {
     saveW(wagers.map((w) => (w.code === code ? { ...w, removed: true } : w)));
     if (todayState?.[code]) {
-      setTodayState((prev) => {
-        const next = { ...prev };
-        delete next[code];
-        return next;
-      });
+      const nextDayState = { ...todayState };
+      delete nextDayState[code];
+      saveToday(Object.keys(nextDayState).length ? nextDayState : null);
     }
   };
 
@@ -429,7 +460,7 @@ function PracticeTab() {
     setWagers(null);
     setLedger([]);
     setSetupMode(true);
-    setTodayState(null);
+    await saveToday(null);
     setAddingWager(false);
     setDrafts([{ code: "", name: "", plus: "", minus: "", category: "Habit" }]);
     try {
@@ -538,7 +569,7 @@ function PracticeTab() {
 
   /* ── Active Practice View ── */
   const allFilled = todayState && activeWagers.every((w) => todayState[w.code]?.outcome);
-  const dayNumber = ledger.length + 1;
+  const dayNumber = todayState?.day || ledger.length + 1;
 
   return (
     <div style={{ maxWidth: 780, margin: "0 auto" }}>
@@ -556,7 +587,10 @@ function PracticeTab() {
           </div>
         ) : (
           <div>
-            <p style={{ ...S.muted, margin: "0 0 20px" }}>Day {dayNumber}</p>
+            <p style={{ ...S.muted, margin: "0 0 8px" }}>Day {dayNumber}</p>
+            <p style={{ ...S.muted, margin: "0 0 20px", fontSize: 12 }}>
+              Flip results are already recorded for today (U/C and all constrained outcomes). Fill U outcomes before the next flip.
+            </p>
 
             <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
               {activeWagers.map((w) => {
@@ -637,7 +671,7 @@ function PracticeTab() {
                   cursor: allFilled ? "pointer" : "default",
                 }}
               >
-                {flipAnim ? "Flipping..." : `Flip Next Day (records Day ${dayNumber})`}
+                {flipAnim ? "Flipping..." : "Flip Next Day"}
               </button>
               {!allFilled && <p style={{ ...S.muted, marginTop: 10, marginBottom: 0 }}>Fill all U outcomes before flipping the next day.</p>}
             </div>
