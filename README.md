@@ -27,17 +27,23 @@ npm run build
 npm run preview:host
 ```
 
-## Deploy (GitHub Pages)
+## Deploy to GitHub Pages
 
-1. Push this repo to GitHub.
-2. Configure Pages to deploy from GitHub Actions.
-3. Deploy the `dist/` output produced by `npm run build`.
+1. In GitHub, go to **Settings → Pages** and set **Source** to **GitHub Actions**.
+2. Push to `main`.
+3. The workflow at `.github/workflows/pages.yml` builds the app and deploys `dist/` to Pages.
 
-## Install as app (mobile + desktop)
+### Base path notes (Vite)
 
-- **iOS Safari**: Share → **Add to Home Screen**.
-- **Android Chrome**: browser menu → **Install app**.
-- **Desktop Chrome/Edge**: use the install icon in the address bar.
+- This repo defaults to `base: "/ATDU/"` for repository Pages URLs (`https://<user>.github.io/ATDU/`).
+- If you use a custom domain, set `VITE_BASE_PATH=/` in your workflow/environment before build.
+
+## Install on iOS
+
+1. Open the live Pages URL in **Safari**.
+2. Tap **Share**.
+3. Tap **Add to Home Screen**.
+4. Launch ATDU from your Home Screen.
 
 ## Data behavior
 
