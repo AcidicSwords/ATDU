@@ -87,6 +87,9 @@ const S = {
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap');
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { min-height: 100%; }
+body { background: #f5f0e8; color: #2c2416; }
+button, input { font: inherit; }
 input:focus { border-color: ${COLOR.gold} !important; box-shadow: 0 0 0 2px ${COLOR.gold}30; }
 ::selection { background: ${COLOR.goldFade}; }
 table tr:last-child { border-bottom: none !important; }
@@ -99,6 +102,13 @@ HELPERS (rules + formatting)
 
 const DISP_MINUS = "−"; // display only
 const OUT = { PLUS: "+", MINUS: "-" }; // internal
+
+function normalizeCode(code) {
+  return (code || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 2);
+}
 
 function invertOutcome(o) {
   return o === OUT.PLUS ? OUT.MINUS : OUT.PLUS;
@@ -328,9 +338,10 @@ function PracticeTab() {
     const valid = drafts
       .map((d) => ({
         ...d,
-        code: (d.code || "").toUpperCase().slice(0, 2),
+        code: normalizeCode(d.code),
       }))
       .filter((d) => d.code && d.name && d.plus && d.minus);
+    if (new Set(valid.map((d) => d.code)).size !== valid.length) return;
     if (!valid.length) return;
     saveW(valid);
     setSetupMode(false);
@@ -386,7 +397,7 @@ function PracticeTab() {
   const addWager = () => {
     const cleaned = {
       ...newWager,
-      code: (newWager.code || "").toUpperCase().slice(0, 2),
+      code: normalizeCode(newWager.code),
     };
     if (!cleaned.code || !cleaned.name || !cleaned.plus || !cleaned.minus) return;
     if (wagers.some((w) => w.code === cleaned.code && !w.removed)) return;
@@ -450,7 +461,7 @@ function PracticeTab() {
                     style={{ ...S.input, textTransform: "uppercase", fontWeight: 700, textAlign: "center" }}
                     maxLength={2}
                     value={d.code}
-                    onChange={(e) => updateDraft(i, "code", e.target.value.toUpperCase())}
+                    onChange={(e) => updateDraft(i, "code", normalizeCode(e.target.value))}
                     placeholder="W"
                   />
                 </div>
@@ -731,7 +742,7 @@ function PracticeTab() {
                 style={{ ...S.input, textTransform: "uppercase", fontWeight: 700, textAlign: "center" }}
                 maxLength={2}
                 value={newWager.code}
-                onChange={(e) => setNewWager((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
+                onChange={(e) => setNewWager((p) => ({ ...p, code: normalizeCode(e.target.value) }))}
               />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1116,7 +1127,7 @@ export default function App() {
         minHeight: "100vh",
         maxWidth: 900,
         margin: "0 auto",
-        padding: "0 20px",
+        padding: "0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left))",
       }}
     >
       <style>{GLOBAL_CSS}</style>
@@ -1138,7 +1149,7 @@ export default function App() {
         <p style={{ ...S.muted, marginTop: 6, fontSize: 13 }}>A coin, a wager, a ledger.</p>
       </header>
 
-      <nav style={{ display: "flex", justifyContent: "center", gap: 4, margin: "24px 0 8px", borderBottom: `1px solid ${COLOR.border}` }}>
+      <nav style={{ display: "flex", justifyContent: "center", gap: 4, margin: "24px 0 8px", borderBottom: `1px solid ${COLOR.border}`, flexWrap: "wrap" }}>
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -1148,7 +1159,7 @@ export default function App() {
               fontFamily: FONT.sans,
               fontSize: 13,
               fontWeight: 600,
-              padding: "10px 24px 12px",
+              padding: "10px clamp(12px, 3vw, 24px) 12px",
               background: "none",
               border: "none",
               borderBottom: `2px solid ${tab === t.id ? COLOR.ink : "transparent"}`,
