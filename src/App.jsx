@@ -270,7 +270,10 @@ function PracticeTab() {
       } catch {}
       try {
         const t = await window.storage.get(SKEY.today);
-        if (t?.value) setTodayState(JSON.parse(t.value));
+        if (t?.value) {
+          const parsed = JSON.parse(t.value);
+          setTodayState(parsed?.day ? parsed : null);
+        }
       } catch {}
     })();
   }, []);
@@ -380,6 +383,20 @@ function PracticeTab() {
     return state;
   }, [activeWagers, getLastC, getLastEntry]);
 
+  const toLedgerEntry = useCallback(
+    (dayState) => {
+      const entry = { day: dayState.day };
+      activeWagers.forEach((w) => {
+        const ts = dayState[w.code];
+        if (!ts) return;
+        entry[w.code] = { mode: ts.mode, outcome: normalizeOutcome(ts.outcome) };
+        if (ts.mode === "C" && ts.invType) entry[w.code].inv = ts.invType;
+      });
+      return entry;
+    },
+    [activeWagers]
+  );
+
   const flipAll = () => {
     const canAdvanceDay = !todayState || activeWagers.every((w) => todayState[w.code]?.outcome);
     if (!canAdvanceDay) return;
@@ -387,26 +404,27 @@ function PracticeTab() {
     setFlipAnim(true);
 
     setTimeout(() => {
-      if (todayState) {
-        const entry = { day: ledger.length + 1 };
-        activeWagers.forEach((w) => {
-          const ts = todayState[w.code];
-          entry[w.code] = { mode: ts.mode, outcome: normalizeOutcome(ts.outcome) };
-          if (ts.mode === "C" && ts.invType) entry[w.code].inv = ts.invType;
-        });
-        saveL([...ledger, entry]);
-      }
-
-      saveToday(buildFlippedDay());
+      const nextDay = (todayState?.day || ledger.length) + 1;
+      const nextState = { ...buildFlippedDay(), day: nextDay };
+      const nextEntry = toLedgerEntry(nextState);
+      saveL([...ledger, nextEntry]);
+      saveToday(nextState);
       setFlipAnim(false);
     }, 500);
   };
 
-  const setOutcome = (code, val) =>
-    saveToday({
+  const setOutcome = (code, val) => {
+    const nextState = {
       ...todayState,
       [code]: { ...todayState[code], outcome: normalizeOutcome(val) },
-    });
+    };
+
+    saveToday(nextState);
+
+    const nextEntry = toLedgerEntry(nextState);
+    const hasDay = ledger.some((d) => d.day === nextEntry.day);
+    saveL(hasDay ? ledger.map((d) => (d.day === nextEntry.day ? nextEntry : d)) : [...ledger, nextEntry]);
+  };
 
   /* ── Add/Remove wagers mid-practice ── */
   const addWager = () => {
@@ -551,7 +569,7 @@ function PracticeTab() {
 
   /* ── Active Practice View ── */
   const allFilled = todayState && activeWagers.every((w) => todayState[w.code]?.outcome);
-  const dayNumber = ledger.length + 1;
+  const dayNumber = todayState?.day || ledger.length + 1;
 
   return (
     <div style={{ maxWidth: 780, margin: "0 auto" }}>
@@ -653,7 +671,7 @@ function PracticeTab() {
                   cursor: allFilled ? "pointer" : "default",
                 }}
               >
-                {flipAnim ? "Flipping..." : `Flip Next Day (records Day ${dayNumber})`}
+                {flipAnim ? "Flipping..." : "Flip Next Day"}
               </button>
               {!allFilled && <p style={{ ...S.muted, marginTop: 10, marginBottom: 0 }}>Fill all U outcomes before flipping the next day.</p>}
             </div>
