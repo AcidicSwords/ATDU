@@ -94,6 +94,22 @@ input:focus { border-color: ${COLOR.gold} !important; box-shadow: 0 0 0 2px ${CO
 ::selection { background: ${COLOR.goldFade}; }
 table tr:last-child { border-bottom: none !important; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.practice-day-card { padding: 12px 14px; border-radius: 6px; background: ${COLOR.white}; border: 1px solid ${COLOR.border}; }
+.practice-day-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.practice-day-actions { display: flex; gap: 6px; }
+.practice-constrained-outcome { font-family: ${FONT.serif}; font-weight: 700; font-size: 18px; color: ${COLOR.ink}; }
+
+@media (max-width: 640px) {
+  .practice-day-card { padding: 12px; }
+  .practice-day-row { align-items: flex-start; gap: 8px; }
+  .practice-day-actions { width: 100%; gap: 8px; }
+  .practice-day-actions button { flex: 1; min-height: 40px; }
+  .practice-constrained-outcome { width: 100%; display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
+  .mobile-stack { flex-wrap: wrap; }
+  .mobile-stack > div { min-width: 100%; }
+  .tab-button { min-width: 30%; }
+}
 `;
 
 /* ═══════════════════════════════════════════════════
@@ -123,6 +139,10 @@ function normalizeOutcome(o) {
 function fmtOutcome(o) {
   const n = normalizeOutcome(o);
   return n === OUT.MINUS ? DISP_MINUS : "+";
+}
+
+function outcomeDescription(w, outcome) {
+  return normalizeOutcome(outcome) === OUT.MINUS ? `DO NOT ${w.plus}` : `DO ${w.plus}`;
 }
 
 function getWagerTooltip(w) {
@@ -484,7 +504,7 @@ function PracticeTab() {
         <div style={{ display: "grid", gap: 16, marginTop: 20 }}>
           {drafts.map((d, i) => (
             <div key={i} style={{ ...S.card, padding: 16 }}>
-              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+              <div className="mobile-stack" style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                 <div style={{ width: 60, flexShrink: 0 }}>
                   <label style={S.label}>Code</label>
                   <input
@@ -501,7 +521,7 @@ function PracticeTab() {
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+              <div className="mobile-stack" style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <label style={{ ...S.label, color: COLOR.green }}>+ Side (DO X)</label>
                   <input
@@ -602,8 +622,8 @@ function PracticeTab() {
                 const oc = o === OUT.PLUS ? COLOR.green : o === OUT.MINUS ? COLOR.red : COLOR.inkL;
 
                 return (
-                  <div key={w.code} style={{ padding: "12px 14px", borderRadius: 6, background: COLOR.white, border: `1px solid ${COLOR.border}` }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div key={w.code} className="practice-day-card">
+                    <div className="practice-day-row">
                       <span
                         style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 18, color: COLOR.ink, minWidth: 32 }}
                         title={getWagerTooltip(w)}
@@ -624,9 +644,12 @@ function PracticeTab() {
                       <span style={{ fontSize: 13, color: COLOR.inkL, flex: 1, minWidth: 60 }}>{w.name}</span>
 
                       {isC ? (
-                        <span style={{ fontWeight: 700, fontSize: 18, color: oc }}>{fmtOutcome(o)}</span>
+                        <span className="practice-constrained-outcome" style={{ color: oc }}>
+                          <span>{fmtOutcome(o)} ({outcomeDescription(w, o)})</span>
+                          <span style={{ fontSize: 11, color: COLOR.inkL, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>Constrained</span>
+                        </span>
                       ) : (
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div className="practice-day-actions">
                           {[OUT.PLUS, OUT.MINUS].map((val) => {
                             const c = val === OUT.PLUS ? COLOR.green : COLOR.red;
                             const active = normalizeOutcome(ts.outcome) === val;
@@ -769,7 +792,7 @@ function PracticeTab() {
         <div style={{ ...S.card, padding: 16, borderLeft: `3px solid ${COLOR.gold}` }}>
           <h3 style={{ ...S.h3, margin: "0 0 12px", fontSize: 16 }}>Add Wager</h3>
 
-          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+          <div className="mobile-stack" style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <div style={{ width: 60, flexShrink: 0 }}>
               <label style={S.label}>Code</label>
               <input
@@ -785,7 +808,7 @@ function PracticeTab() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+          <div className="mobile-stack" style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <label style={{ ...S.label, color: COLOR.green }}>+ Side (DO X)</label>
               <input
@@ -1189,6 +1212,7 @@ export default function App() {
             key={t.id}
             onClick={() => setTab(t.id)}
             aria-current={tab === t.id ? "page" : undefined}
+            className="tab-button"
             style={{
               fontFamily: FONT.sans,
               fontSize: 13,
