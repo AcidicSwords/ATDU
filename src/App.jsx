@@ -361,6 +361,21 @@ function PracticeTab() {
     [ledger]
   );
 
+
+  const isBrightU = useCallback(
+    (dayIndex, code) => {
+      const entry = ledger[dayIndex]?.[code];
+      if (!entry || entry.mode !== "U") return false;
+
+      const outcome = normalizeOutcome(entry.outcome);
+      if (!outcome) return false;
+
+      const sameUOutcome = (candidate) => candidate?.mode === "U" && normalizeOutcome(candidate.outcome) === outcome;
+      return sameUOutcome(ledger[dayIndex - 1]?.[code]) || sameUOutcome(ledger[dayIndex + 1]?.[code]);
+    },
+    [ledger]
+  );
+
   /* ── First-constrained default by category ──
      Habit → +
      Contested → +
@@ -750,6 +765,8 @@ function PracticeTab() {
                       if (!e) return <td key={w.code} style={{ textAlign: "center", padding: 6, color: COLOR.borderL }}>—</td>;
 
                       const o = normalizeOutcome(e.outcome);
+                      const brightU = isBrightU(i, w.code);
+                      const isFaded = e.mode === "C" || !brightU;
                       return (
                         <td key={w.code} style={{ textAlign: "center", padding: 6 }}>
                           <span
@@ -758,9 +775,15 @@ function PracticeTab() {
                               fontWeight: 700,
                               fontSize: 17,
                               color: o === OUT.PLUS ? COLOR.green : COLOR.red,
-                              opacity: e.mode === "C" ? 0.5 : 1,
+                              opacity: isFaded ? 0.5 : 1,
                             }}
-                            title={e.mode === "C" && e.inv ? `C (${e.inv === "last" ? "inverse of last entry" : "inverse of last constrained"})` : e.mode}
+                            title={
+                              e.mode === "C" && e.inv
+                                ? `C (${e.inv === "last" ? "inverse of last entry" : "inverse of last constrained"})`
+                                : e.mode === "U" && brightU
+                                  ? "U (bright: in a same-color run)"
+                                  : "U (faded: isolated from same-color U run)"
+                            }
                           >
                             {e.mode}
                           </span>
@@ -781,7 +804,7 @@ function PracticeTab() {
                 <span style={{ display: "inline-block", width: 8, height: 8, background: COLOR.red, borderRadius: 1, marginRight: 4, verticalAlign: "middle" }} />
                 <span style={{ color: COLOR.red }}>{DISP_MINUS}</span>
               </span>
-              <span style={{ color: COLOR.inkL }}>bright = U · faded = C</span>
+              <span style={{ color: COLOR.inkL }}>bright = U runs (2+ same-color U) · faded = C + isolated U</span>
             </div>
           </div>
         </div>
