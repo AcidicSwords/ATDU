@@ -142,18 +142,18 @@ function fmtOutcome(o) {
 }
 
 function outcomeDescription(w, outcome) {
-  return normalizeOutcome(outcome) === OUT.MINUS ? `DO INVERSE ${w.plus}` : `DO ${w.plus}`;
+  return normalizeOutcome(outcome) === OUT.MINUS ? `DO ${w.minus}` : `DO ${w.plus}`;
 }
 
 function getWagerTooltip(w) {
   // Keep it strictly structural + reduce "inaction" misread.
-  // Both are do-assertions: DO X / DO INVERSE X.
+  // Both are do-assertions: DO X / DO Y (explicit minus side).
   const plus = (w.plus || "").trim();
   const minus = (w.minus || "").trim();
   return [
     `WAGER: ${w.name} (${w.code})`,
     `+ : DO ${plus}`,
-    `- : DO INVERSE ${plus}${minus ? ` (label: ${minus})` : ""}`,
+    `- : DO ${minus || "(unset)"}`,
     `Mode: U = you choose · C = coin assigns`,
     `C inversion: inverse of last entry OR inverse of last constrained entry`,
   ].join("\n");
@@ -181,7 +181,7 @@ function EstablishTab() {
             color: COLOR.gold,
             text:
               "A wager is a named binary with two mutually exclusive inverses: + and −. " +
-              "+ and − are both deliberate assertions: + = DO X, − = DO INVERSE X. " +
+              "+ and − are both deliberate assertions: + = DO X, − = DO Y (the explicit minus side). " +
               "Before practice, classify each wager as Habit, Contested, or Planned Not Taken.",
           },
           {
@@ -513,7 +513,7 @@ function PracticeTab() {
         <h2 style={S.h2}>Define Wagers</h2>
         <p style={S.muted}>
           Each wager needs a code (1-2 letters), a name, a + label, a − label, and a classification.
-          + and − are mutually exclusive inverses: + = DO X, − = DO INVERSE X.
+          + and − are mutually exclusive sides: + = DO X, − = DO Y (the explicit minus side).
         </p>
 
         <div style={{ display: "grid", gap: 16, marginTop: 20 }}>
@@ -547,12 +547,12 @@ function PracticeTab() {
                   />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <label style={{ ...S.label, color: COLOR.red }}>− Side (DO INVERSE X)</label>
+                  <label style={{ ...S.label, color: COLOR.red }}>− Side (DO Y)</label>
                   <input
                     style={{ ...S.input, borderColor: `${COLOR.red}40` }}
                     value={d.minus}
                     onChange={(e) => updateDraft(i, "minus", e.target.value)}
-                    placeholder="Do inverse X (or an explicit inverse action)"
+                    placeholder="Do Y (your explicit minus-side action)"
                   />
                 </div>
               </div>
@@ -681,7 +681,7 @@ function PracticeTab() {
                                   color: active ? "#fff" : c,
                                   border: `1.5px solid ${c}`,
                                 }}
-                                title={val === OUT.PLUS ? `+ : DO ${w.plus}` : `− : DO INVERSE ${w.plus}`}
+                                title={val === OUT.PLUS ? `+ : DO ${w.plus}` : `− : DO ${w.minus}`}
                               >
                                 {val === OUT.MINUS ? DISP_MINUS : "+"}
                               </button>
@@ -841,7 +841,7 @@ function PracticeTab() {
               />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <label style={{ ...S.label, color: COLOR.red }}>− Side (DO INVERSE X)</label>
+              <label style={{ ...S.label, color: COLOR.red }}>− Side (DO Y)</label>
               <input
                 style={{ ...S.input, borderColor: `${COLOR.red}40` }}
                 value={newWager.minus}
