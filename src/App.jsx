@@ -96,16 +96,26 @@ table tr:last-child { border-bottom: none !important; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
 .practice-day-card { padding: 12px 14px; border-radius: 6px; background: ${COLOR.white}; border: 1px solid ${COLOR.border}; }
-.practice-day-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.practice-day-row { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
 .practice-day-actions { display: flex; gap: 6px; }
+.practice-day-actions-vertical { flex-direction: column; align-items: center; min-width: 220px; }
+.practice-unconstrained-selection { font-size: 11px; color: ${COLOR.inkL}; text-transform: uppercase; letter-spacing: 0.04em; text-align: center; }
+.practice-day-center-stack { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; min-width: 210px; text-align: center; }
+.practice-day-code { font-family: ${FONT.serif}; font-weight: 700; font-size: 18px; color: ${COLOR.ink}; }
+.practice-day-title { font-size: 13px; color: ${COLOR.inkL}; }
+.practice-action-option { width: 100%; max-width: 280px; text-align: center; }
+.practice-selected-action { font-family: ${FONT.serif}; font-weight: 700; font-size: 16px; text-align: center; }
+.ledger-odds-cell { font-family: ${FONT.serif}; font-weight: 700; font-size: 16px; }
 .practice-constrained-outcome { font-family: ${FONT.serif}; font-weight: 700; font-size: 18px; color: ${COLOR.ink}; }
 
 @media (max-width: 640px) {
   .practice-day-card { padding: 12px; }
-  .practice-day-row { align-items: flex-start; gap: 8px; }
+  .practice-day-row { align-items: stretch; gap: 8px; }
   .practice-day-actions { width: 100%; gap: 8px; }
+  .practice-day-actions-vertical { min-width: 100%; }
+  .practice-day-center-stack { min-width: 100%; }
   .practice-day-actions button { flex: 1; min-height: 40px; }
-  .practice-constrained-outcome { width: 100%; display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
+  .practice-constrained-outcome { width: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; padding-top: 2px; }
   .mobile-stack { flex-wrap: wrap; }
   .mobile-stack > div { min-width: 100%; }
   .tab-button { min-width: 30%; }
@@ -143,6 +153,13 @@ function fmtOutcome(o) {
 
 function outcomeDescription(w, outcome) {
   return normalizeOutcome(outcome) === OUT.MINUS ? `DO ${w.minus}` : `DO ${w.plus}`;
+}
+
+function formatOddsSymbol(odds) {
+  if (!odds) return "—";
+  if (odds.plusPct === 100) return OUT.PLUS;
+  if (odds.minusPct === 100) return OUT.MINUS;
+  return "split";
 }
 
 function getWagerTooltip(w) {
@@ -361,6 +378,50 @@ function PracticeTab() {
     [ledger]
   );
 
+  /* ── First-constrained default by category ──
+     Habit → +
+     Contested → +
+     Planned Not Taken → - */
+  const categoryDefault = (w) => (w.category === "Planned Not Taken" ? OUT.MINUS : OUT.PLUS);
+
+  const getConstrainedOdds = useCallback(
+    (wager, forcedUnconstrainedOutcome = null) => {
+      const code = wager.code;
+      const plusDefault = categoryDefault(wager) === OUT.PLUS ? 1 : 0;
+      const minusDefault = categoryDefault(wager) === OUT.MINUS ? 1 : 0;
+
+      const lastConstrained = getLastC(code);
+      const constrainedOutcome = lastConstrained ? normalizeOutcome(lastConstrained.outcome) : null;
+
+      let lastEntry = getLastEntry(code);
+      if (todayState?.[code]?.mode === "U" && forcedUnconstrainedOutcome) {
+        lastEntry = { mode: "U", outcome: normalizeOutcome(forcedUnconstrainedOutcome) };
+      }
+      const lastOutcome = lastEntry ? normalizeOutcome(lastEntry.outcome) : null;
+
+      const lastPlus = lastOutcome ? (invertOutcome(lastOutcome) === OUT.PLUS ? 1 : 0) : plusDefault;
+      const lastMinus = lastOutcome ? (invertOutcome(lastOutcome) === OUT.MINUS ? 1 : 0) : minusDefault;
+
+      const constrainedPlus = constrainedOutcome ? (invertOutcome(constrainedOutcome) === OUT.PLUS ? 1 : 0) : plusDefault;
+      const constrainedMinus = constrainedOutcome ? (invertOutcome(constrainedOutcome) === OUT.MINUS ? 1 : 0) : minusDefault;
+
+      return {
+        plusPct: Math.round(((lastPlus + constrainedPlus) / 2) * 100),
+        minusPct: Math.round(((lastMinus + constrainedMinus) / 2) * 100),
+      };
+    },
+    [getLastC, getLastEntry, todayState]
+  );
+
+
+  const getRollingOddsForWager = useCallback(
+    (wager) => {
+      const current = todayState?.[wager.code];
+      const forcedOutcome = current?.mode === "U" ? normalizeOutcome(current.outcome) : null;
+      return getConstrainedOdds(wager, forcedOutcome);
+    },
+    [getConstrainedOdds, todayState]
+  );
 
   const isBrightU = useCallback(
     (dayIndex, code) => {
@@ -375,12 +436,6 @@ function PracticeTab() {
     },
     [ledger]
   );
-
-  /* ── First-constrained default by category ──
-     Habit → +
-     Contested → +
-     Planned Not Taken → - */
-  const categoryDefault = (w) => (w.category === "Planned Not Taken" ? OUT.MINUS : OUT.PLUS);
 
   /* ── Drafts ── */
   const updateDraft = (i, field, value) =>
@@ -627,7 +682,7 @@ function PracticeTab() {
               Flip results are already recorded for today (U/C and all constrained outcomes). Fill U outcomes before the next flip.
             </p>
 
-            <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
+            <div style={{ display: "grid", gap: 10, textAlign: "center" }}>
               {activeWagers.map((w) => {
                 const ts = todayState[w.code];
                 if (!ts) return null;
@@ -635,60 +690,57 @@ function PracticeTab() {
                 const isC = ts.mode === "C";
                 const o = normalizeOutcome(ts.outcome);
                 const oc = o === OUT.PLUS ? COLOR.green : o === OUT.MINUS ? COLOR.red : COLOR.inkL;
+                const selectedAction = o ? outcomeDescription(w, o) : null;
 
                 return (
                   <div key={w.code} className="practice-day-card">
                     <div className="practice-day-row">
-                      <span
-                        style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 18, color: COLOR.ink, minWidth: 32 }}
-                        title={getWagerTooltip(w)}
-                      >
-                        {w.code}
-                      </span>
+                      <div className="practice-day-center-stack">
+                        <span className="practice-day-code" title={getWagerTooltip(w)}>{w.code}</span>
+                        <span className="practice-day-title">{w.name}</span>
+                        {isC && (
+                          <span style={{ fontSize: 11, color: COLOR.inkL, fontStyle: "italic" }}>
+                            {ts.invType === "last" ? "inverse of last entry" : "inverse of last constrained"}
+                          </span>
+                        )}
 
-                      <span style={{ ...S.tag, background: isC ? `${COLOR.ink}12` : `${COLOR.gold}20`, color: isC ? COLOR.ink : COLOR.gold }}>
-                        {ts.mode}
-                      </span>
-
-                      {isC && (
-                        <span style={{ fontSize: 11, color: COLOR.inkL, fontStyle: "italic" }}>
-                          {ts.invType === "last" ? "inverse of last entry" : "inverse of last constrained"}
-                        </span>
-                      )}
-
-                      <span style={{ fontSize: 13, color: COLOR.inkL, flex: 1, minWidth: 60 }}>{w.name}</span>
-
-                      {isC ? (
-                        <span className="practice-constrained-outcome" style={{ color: oc }}>
-                          <span>{fmtOutcome(o)} ({outcomeDescription(w, o)})</span>
-                          <span style={{ fontSize: 11, color: COLOR.inkL, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>Constrained</span>
-                        </span>
-                      ) : (
-                        <div className="practice-day-actions">
-                          {[OUT.PLUS, OUT.MINUS].map((val) => {
-                            const c = val === OUT.PLUS ? COLOR.green : COLOR.red;
-                            const active = normalizeOutcome(ts.outcome) === val;
-                            return (
-                              <button
-                                key={val}
-                                onClick={() => setOutcome(w.code, val)}
-                                style={{
-                                  ...S.btn,
-                                  padding: "6px 16px",
-                                  fontSize: 15,
-                                  fontWeight: 700,
-                                  background: active ? c : "transparent",
-                                  color: active ? "#fff" : c,
-                                  border: `1.5px solid ${c}`,
-                                }}
-                                title={val === OUT.PLUS ? `+ : DO ${w.plus}` : `− : DO ${w.minus}`}
-                              >
-                                {val === OUT.MINUS ? DISP_MINUS : "+"}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
+                        {isC ? (
+                          <span className="practice-constrained-outcome" style={{ color: oc }}>
+                            <span className="practice-selected-action">{selectedAction}</span>
+                            <span style={{ fontSize: 11, color: COLOR.inkL, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                              Constrained selection
+                            </span>
+                          </span>
+                        ) : (
+                          <div className="practice-day-actions practice-day-actions-vertical">
+                            {[OUT.PLUS, OUT.MINUS].map((val) => {
+                              const c = val === OUT.PLUS ? COLOR.green : COLOR.red;
+                              const active = normalizeOutcome(ts.outcome) === val;
+                              const label = val === OUT.PLUS ? `DO ${w.plus}` : `DO ${w.minus}`;
+                              return (
+                                <button
+                                  key={val}
+                                  onClick={() => setOutcome(w.code, val)}
+                                  className="practice-action-option"
+                                  style={{
+                                    ...S.btn,
+                                    padding: "10px 14px",
+                                    fontSize: 13,
+                                    fontWeight: 700,
+                                    background: active ? c : "transparent",
+                                    color: active ? "#fff" : c,
+                                    border: `1.5px solid ${c}`,
+                                  }}
+                                  title={label}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                            <span className="practice-unconstrained-selection">Unconstrained selection</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -754,6 +806,33 @@ function PracticeTab() {
               </thead>
 
               <tbody>
+                <tr style={{ borderBottom: `1px solid ${COLOR.borderL}` }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 700, fontSize: 11, color: COLOR.inkL, letterSpacing: "0.05em" }}>
+                    ODDS
+                  </td>
+                  {ledgerWagers.map((w) => {
+                    if (w.removed) return <td key={w.code} style={{ textAlign: "center", padding: 6, color: COLOR.borderL }}>—</td>;
+                    const odds = getRollingOddsForWager(w);
+                    const symbol = formatOddsSymbol(odds);
+                    return (
+                      <td key={w.code} style={{ textAlign: "center", padding: 6 }}>
+                        {symbol === "split" ? (
+                          <span className="ledger-odds-cell" style={{ color: COLOR.gold }} title={`next C odds: + ${odds.plusPct}% · − ${odds.minusPct}%`}>
+                            =
+                          </span>
+                        ) : (
+                          <span
+                            className="ledger-odds-cell"
+                            style={{ color: symbol === OUT.PLUS ? COLOR.green : COLOR.red }}
+                            title={`next C odds: + ${odds.plusPct}% · − ${odds.minusPct}%`}
+                          >
+                            {fmtOutcome(symbol)}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
                 {ledger.map((day, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${COLOR.borderL}` }}>
                     <td style={{ padding: "6px 10px", fontWeight: 600, fontSize: 13, color: COLOR.inkL }}>
