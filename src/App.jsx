@@ -99,7 +99,6 @@ table tr:last-child { border-bottom: none !important; }
 .practice-day-row { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
 .practice-day-actions { display: flex; gap: 6px; }
 .practice-day-actions-vertical { flex-direction: column; align-items: center; min-width: 220px; }
-.practice-unconstrained-selection { font-size: 11px; color: ${COLOR.inkL}; text-transform: uppercase; letter-spacing: 0.04em; text-align: center; }
 .practice-day-center-stack { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; min-width: 210px; text-align: center; }
 .practice-day-code { font-family: ${FONT.serif}; font-weight: 700; font-size: 18px; color: ${COLOR.ink}; }
 .practice-day-title { font-size: 13px; color: ${COLOR.inkL}; }
@@ -172,7 +171,6 @@ function getWagerTooltip(w) {
     `+ : DO ${plus}`,
     `- : DO ${minus || "(unset)"}`,
     `Mode: U = you choose · C = coin assigns`,
-    `C inversion: inverse of last entry OR inverse of last constrained entry`,
   ].join("\n");
 }
 
@@ -679,7 +677,7 @@ function PracticeTab() {
           <div>
             <p style={{ ...S.muted, margin: "0 0 8px" }}>Day {dayNumber}</p>
             <p style={{ ...S.muted, margin: "0 0 20px", fontSize: 12 }}>
-              Flip results are already recorded for today (U/C and all constrained outcomes). Fill U outcomes before the next flip.
+              Flip results are already recorded for today. Fill remaining outcomes before the next flip.
             </p>
 
             <div style={{ display: "grid", gap: 10, textAlign: "center" }}>
@@ -698,18 +696,9 @@ function PracticeTab() {
                       <div className="practice-day-center-stack">
                         <span className="practice-day-code" title={getWagerTooltip(w)}>{w.code}</span>
                         <span className="practice-day-title">{w.name}</span>
-                        {isC && (
-                          <span style={{ fontSize: 11, color: COLOR.inkL, fontStyle: "italic" }}>
-                            {ts.invType === "last" ? "inverse of last entry" : "inverse of last constrained"}
-                          </span>
-                        )}
-
                         {isC ? (
                           <span className="practice-constrained-outcome" style={{ color: oc }}>
                             <span className="practice-selected-action">{selectedAction}</span>
-                            <span style={{ fontSize: 11, color: COLOR.inkL, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                              Constrained selection
-                            </span>
                           </span>
                         ) : (
                           <div className="practice-day-actions practice-day-actions-vertical">
@@ -737,7 +726,6 @@ function PracticeTab() {
                                 </button>
                               );
                             })}
-                            <span className="practice-unconstrained-selection">Unconstrained selection</span>
                           </div>
                         )}
                       </div>
@@ -858,7 +846,7 @@ function PracticeTab() {
                             }}
                             title={
                               e.mode === "C" && e.inv
-                                ? `C (${e.inv === "last" ? "inverse of last entry" : "inverse of last constrained"})`
+                                ? "C"
                                 : e.mode === "U" && brightU
                                   ? "U (bright: in a same-color run)"
                                   : "U (faded: isolated from same-color U run)"
