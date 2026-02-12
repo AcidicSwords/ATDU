@@ -237,6 +237,7 @@ function EstablishTab() {
             "For each wager, perform Flip 1 (mode).",
             "Heads = U (you select outcome). Tails = C (outcome assigned by rule).",
             "On U: choose + or − during the day. Record what occurred at day-end.",
+            "For each wager/day, outcomes are mutually exclusive and exhaustive: exactly one of + or − resolves; they cannot both occur on the same day.",
             "On C: perform Flip 2 (rule). Heads = inverse of last entry. Tails = inverse of last constrained entry. If no reference exists, category default applies.",
             "Record one cell per wager: mode letter (U/C) colored by outcome (+ green, − red).",
           ].map((text, i) => (
