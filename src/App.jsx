@@ -151,7 +151,7 @@ function fmtOutcome(o) {
 }
 
 function outcomeDescription(w, outcome) {
-  return normalizeOutcome(outcome) === OUT.MINUS ? `DO ${w.minus}` : `DO ${w.plus}`;
+  return normalizeOutcome(outcome) === OUT.MINUS ? w.minus : w.plus;
 }
 
 function formatOddsSymbol(odds) {
@@ -162,15 +162,23 @@ function formatOddsSymbol(odds) {
 }
 
 function getWagerTooltip(w) {
-  // Keep it strictly structural + reduce "inaction" misread.
-  // Both are do-assertions: DO X / DO Y (explicit minus side).
   const plus = (w.plus || "").trim();
   const minus = (w.minus || "").trim();
   return [
     `WAGER: ${w.name} (${w.code})`,
-    `+ : DO ${plus}`,
-    `- : DO ${minus || "(unset)"}`,
-    `Mode: U = you choose · C = coin assigns`,
+    ``,
+    `Domain: ${w.name}`,
+    ``,
+    `+ : ${plus || "(unset)"}`,
+    `− : ${minus || "(unset)"}`,
+    ``,
+    `Mode:`,
+    `U — you select outcome`,
+    `C — outcome assigned by rule`,
+    ``,
+    `Constrained inversion:`,
+    `inverse of last outcome OR`,
+    `inverse of last constrained outcome`,
   ].join("\n");
 }
 
@@ -195,8 +203,8 @@ function EstablishTab() {
             name: "The Wager",
             color: COLOR.gold,
             text:
-              "A wager is a named binary with two mutually exclusive inverses: + and −. " +
-              "+ and − are both deliberate assertions: + = DO X, − = DO Y (the explicit minus side). " +
+              "A wager defines a single action domain that resolves daily into one of two mutually exclusive outcomes: + and −. " +
+              "+ and − are equal members of the same domain partition. " +
               "Before practice, classify each wager as Habit, Contested, or Planned Not Taken.",
           },
           {
@@ -212,7 +220,7 @@ function EstablishTab() {
             color: COLOR.red,
             text:
               "A ledger is a daily record. Each cell stores mode (U or C) and uses color for outcome (+ green, − red). " +
-              "No explanations are recorded. The ledger is effects-only.",
+              "The ledger records resolved outcomes only; no explanation or cause is recorded.",
           },
         ].map(({ name, color, text }) => (
           <div key={name} style={{ ...S.card, borderLeft: `3px solid ${color}` }}>
@@ -227,7 +235,7 @@ function EstablishTab() {
         <div style={{ display: "grid", gap: 20 }}>
           {[
             "For each wager, perform Flip 1 (mode).",
-            "Heads = U (you choose). Tails = C (coin assigns).",
+            "Heads = U (you select outcome). Tails = C (outcome assigned by rule).",
             "On U: choose + or − during the day. Record what occurred at day-end.",
             "On C: perform Flip 2 (rule). Heads = inverse of last entry. Tails = inverse of last constrained entry. If no reference exists, category default applies.",
             "Record one cell per wager: mode letter (U/C) colored by outcome (+ green, − red).",
@@ -255,9 +263,9 @@ function EstablishTab() {
       <p style={S.p}>Classification is descriptive. It is used only for the first constrained default when no prior reference exists.</p>
       <div style={{ display: "grid", gap: 8, marginBottom: 20 }}>
         {[
-          { label: "Habit", color: COLOR.inkL, desc: "One side occurs repeatedly; a rationale is typically assigned after the fact. First constrained default: +." },
-          { label: "Contested", color: COLOR.gold, desc: "Both sides occur at different times; both are justified in context. First constrained default: +." },
-          { label: "Planned Not Taken", color: COLOR.red, desc: "There are reasons for +; when − occurs, there is an explanation that justifies 'later'. First constrained default: −." },
+          { label: "Habit", color: COLOR.inkL, desc: "One outcome occurs repeatedly without prior explicit decision; rationale is typically assigned after occurrence. First constrained default: +." },
+          { label: "Contested", color: COLOR.gold, desc: "Both outcomes occur at different times and are justified within context. First constrained default: +." },
+          { label: "Planned Not Taken", color: COLOR.red, desc: "Reasons exist for one outcome, while the alternative outcome is repeatedly enacted with explanation deferred to later. First constrained default: −." },
         ].map(({ label, color, desc }) => (
           <div key={label} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "8px 0" }}>
             <span style={{ ...S.tag, background: `${color}18`, color, minWidth: 160, textAlign: "center", flexShrink: 0 }}>
@@ -565,8 +573,8 @@ function PracticeTab() {
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
         <h2 style={S.h2}>Define Wagers</h2>
         <p style={S.muted}>
-          Each wager needs a code (1-2 letters), a name, a + label, a − label, and a classification.
-          + and − are mutually exclusive sides: + = DO X, − = DO Y (the explicit minus side).
+          Each wager needs a code (1-2 letters), a name, a + outcome label, a − outcome label, and a classification.
+          Both outcomes belong to the same action domain.
         </p>
 
         <div style={{ display: "grid", gap: 16, marginTop: 20 }}>
@@ -591,21 +599,21 @@ function PracticeTab() {
 
               <div className="mobile-stack" style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <label style={{ ...S.label, color: COLOR.green }}>+ Side (DO X)</label>
+                  <label style={{ ...S.label, color: COLOR.green }}>+ Outcome</label>
                   <input
                     style={{ ...S.input, borderColor: `${COLOR.green}40` }}
                     value={d.plus}
                     onChange={(e) => updateDraft(i, "plus", e.target.value)}
-                    placeholder="Do X"
+                    placeholder="Outcome description"
                   />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <label style={{ ...S.label, color: COLOR.red }}>− Side (DO Y)</label>
+                  <label style={{ ...S.label, color: COLOR.red }}>− Outcome</label>
                   <input
                     style={{ ...S.input, borderColor: `${COLOR.red}40` }}
                     value={d.minus}
                     onChange={(e) => updateDraft(i, "minus", e.target.value)}
-                    placeholder="Do Y (your explicit minus-side action)"
+                    placeholder="Alternative outcome description"
                   />
                 </div>
               </div>
@@ -705,7 +713,7 @@ function PracticeTab() {
                             {[OUT.PLUS, OUT.MINUS].map((val) => {
                               const c = val === OUT.PLUS ? COLOR.green : COLOR.red;
                               const active = normalizeOutcome(ts.outcome) === val;
-                              const label = val === OUT.PLUS ? `DO ${w.plus}` : `DO ${w.minus}`;
+                              const label = val === OUT.PLUS ? w.plus : w.minus;
                               return (
                                 <button
                                   key={val}
@@ -900,7 +908,7 @@ function PracticeTab() {
 
           <div className="mobile-stack" style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <label style={{ ...S.label, color: COLOR.green }}>+ Side (DO X)</label>
+              <label style={{ ...S.label, color: COLOR.green }}>+ Outcome</label>
               <input
                 style={{ ...S.input, borderColor: `${COLOR.green}40` }}
                 value={newWager.plus}
@@ -908,7 +916,7 @@ function PracticeTab() {
               />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <label style={{ ...S.label, color: COLOR.red }}>− Side (DO Y)</label>
+              <label style={{ ...S.label, color: COLOR.red }}>− Outcome</label>
               <input
                 style={{ ...S.input, borderColor: `${COLOR.red}40` }}
                 value={newWager.minus}
@@ -1130,7 +1138,7 @@ function ExtendTab() {
     <div style={{ maxWidth: 780, margin: "0 auto" }}>
       <div style={{ borderLeft: `3px solid ${COLOR.gold}`, paddingLeft: 20, margin: "24px 0 28px" }}>
         <p style={{ ...S.muted, fontStyle: "italic" }}>
-          Five simulated agents run one wager for one year with the same coin rules. The only difference is how each agent chooses on U days.
+          Five simulated agents run one wager for one year with the same coin rules. The only difference is how each agent selects outcomes on U days.
         </p>
       </div>
 
@@ -1202,7 +1210,7 @@ function ExtendTab() {
 
           <div style={{ ...S.card, padding: 20 }}>
             <h3 style={{ ...S.h3, margin: "0 0 4px" }}>Running + Ratio</h3>
-            <p style={{ fontSize: 12, color: COLOR.inkL, margin: "0 0 16px" }}>Cumulative proportion of + over 365 days.</p>
+            <p style={{ fontSize: 12, color: COLOR.inkL, margin: "0 0 16px" }}>Cumulative proportion of the + outcome over 365 days.</p>
 
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={convergence}>
@@ -1236,7 +1244,7 @@ function ExtendTab() {
                       <span style={{ fontSize: 12, color: COLOR.inkL }}>{f.note}</span>
                     </div>
                     <div style={{ display: "flex", gap: 20, fontSize: 13, color: COLOR.inkL, flexWrap: "wrap" }}>
-                      <span>U-choice input: <strong style={{ color: COLOR.ink }}>{input}% +</strong></span>
+                      <span>U-outcome input: <strong style={{ color: COLOR.ink }}>{input}% + outcome</strong></span>
                       <span>Year-end ratio: <strong style={{ color: f.color, fontSize: 15 }}>{overall}% +</strong></span>
                       <span>C days: <strong style={{ color: COLOR.ink }}>{f.cDays}</strong>/365</span>
                       <span>Longest same-outcome run: <strong style={{ color: COLOR.ink }}>{f.longestRun}</strong></span>
