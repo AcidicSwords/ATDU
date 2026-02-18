@@ -56,6 +56,7 @@ const S = {
     textTransform: "uppercase", letterSpacing: "0.05em",
     display: "block", marginBottom: 4,
   },
+  wrapText: { overflowWrap: "anywhere", wordBreak: "break-word", minWidth: 0 },
 };
 
 const GLOBAL_CSS = `
@@ -65,7 +66,7 @@ html, body, #root { min-height: 100%; }
 html { -webkit-text-size-adjust: 100%; }
 body { background: ${COLOR.paper}; color: ${COLOR.ink}; -webkit-tap-highlight-color: transparent; }
 button, input { font: inherit; touch-action: manipulation; }
-input { font-size: 16px !important; }
+input { font-size: 16px !important; overflow: hidden; text-overflow: ellipsis; }
 input:focus { border-color: ${COLOR.gold} !important; box-shadow: 0 0 0 2px ${COLOR.gold}30; }
 ::selection { background: ${COLOR.goldFade}; }
 table tr:last-child { border-bottom: none !important; }
@@ -113,7 +114,11 @@ button:active:not(:disabled) { opacity: 0.85; }
    ═══════════════════════════════════════════════════ */
 
 var canVibrate = typeof navigator !== "undefined" && "vibrate" in navigator;
-function haptic(ms) { if (canVibrate) try { navigator.vibrate(ms); } catch(e) {} }
+function haptic(ms) {
+  if (!canVibrate) return;
+  try { navigator.vibrate(ms); }
+  catch (error) { console.debug("Haptic feedback unavailable", error); }
+}
 function hapticFlip() { haptic([40, 30, 40]); }
 function hapticTap() { haptic(12); }
 function hapticCommit() { haptic([20, 40, 60]); }
@@ -142,6 +147,40 @@ function catDesc(cat) {
 }
 
 function sitTooltip(w) { return w.name + " (" + w.code + ")\n\n" + (w.plus || "") + "\n" + (w.minus || ""); }
+
+async function safeStorageDelete(key, label) {
+  try {
+    await window.storage.delete(key);
+  } catch (error) {
+    console.warn("Failed to clear " + label + " from storage", error);
+  }
+}
+
+function safeParseJson(raw, label, fallbackValue) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn("Failed to parse " + label, error);
+    return fallbackValue;
+  }
+}
+
+async function safeStorageSet(key, value, label) {
+  try {
+    await window.storage.set(key, value);
+  } catch (error) {
+    console.warn("Failed to save " + label + " to storage", error);
+  }
+}
+
+async function safeStorageGet(key, label) {
+  try {
+    return await window.storage.get(key);
+  } catch (error) {
+    console.warn("Failed to read " + label + " from storage", error);
+    return null;
+  }
+}
 
 /* ═══════════════════════════════════════════════════
    SIMULATION
@@ -403,13 +442,13 @@ function RulesTab(props) {
                 <div key={w.code} style={{ ...S.card, padding: 16, marginBottom: 0 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, minWidth: 0 }}>
                     <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 16, color: COLOR.ink, flexShrink: 0 }}>{w.code}</span>
-                    <span style={{ fontSize: 14, color: COLOR.inkL, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{w.name}</span>
+                    <span style={{ ...S.wrapText, fontSize: 14, color: COLOR.inkL, flex: 1 }}>{w.name}</span>
                     <span style={{ ...S.tag, background: CAT_COLORS[w.category] + "12", color: CAT_COLORS[w.category], fontSize: 9, flexShrink: 0 }}>{w.category}</span>
                   </div>
                   <div style={{ fontSize: 13, color: COLOR.inkL, display: "flex", gap: 0, alignItems: "baseline", minWidth: 0 }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR.ink, minWidth: 0 }}>{w.plus}</span>
+                    <span style={{ ...S.wrapText, color: COLOR.ink }}>{w.plus}</span>
                     <span style={{ margin: "0 8px", color: COLOR.borderL, flexShrink: 0 }}>or</span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR.ink, minWidth: 0 }}>{w.minus}</span>
+                    <span style={{ ...S.wrapText, color: COLOR.ink }}>{w.minus}</span>
                   </div>
                 </div>
               );
@@ -585,8 +624,8 @@ function TodayTab(props) {
   var resetAll = async function() {
     saveSituations(null); saveLedger([]); saveToday(null);
     setAdding(false); setEditCode(null); setEditDraft(null);
-    try { await window.storage.delete(SKEY.wagers); } catch(e) {}
-    try { await window.storage.delete(SKEY.ledger); } catch(e) {}
+    await safeStorageDelete(SKEY.wagers, "wagers");
+    await safeStorageDelete(SKEY.ledger, "ledger");
   };
 
   if (!situations || !active.length) {
@@ -633,16 +672,16 @@ function TodayTab(props) {
                   <div key={w.code} className={cardClass} style={justFlipped ? { animationDelay: (wi * 80) + "ms" } : undefined}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, maxWidth: "100%", minWidth: 0 }}>
                       <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 18, color: COLOR.ink }} title={sitTooltip(w)}>{w.code}</span>
-                      <span style={{ fontSize: 13, color: COLOR.inkL, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.name}</span>
+                      <span style={{ ...S.wrapText, fontSize: 13, color: COLOR.inkL, maxWidth: "100%" }}>{w.name}</span>
                       <span style={{ fontSize: 12, fontWeight: 600, color: isAssigned ? COLOR.inkL : COLOR.gold, letterSpacing: "0.04em", marginTop: 4 }}>
                         {isAssigned ? "Assigned" : "You choose"}
                       </span>
 
                       {isAssigned ? (
-                        <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 17, color: COLOR.ink, marginTop: 4, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{chosen}</span>
+                        <span style={{ ...S.wrapText, fontFamily: FONT.serif, fontWeight: 700, fontSize: 17, color: COLOR.ink, marginTop: 4, maxWidth: "100%" }}>{chosen}</span>
                       ) : o ? (
                         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4, maxWidth: "100%", minWidth: 0 }}>
-                          <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 17, color: COLOR.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{chosen}</span>
+                          <span style={{ ...S.wrapText, fontFamily: FONT.serif, fontWeight: 700, fontSize: 17, color: COLOR.ink }}>{chosen}</span>
                           <button onClick={function() { setOutcome(w.code, o === OUT.PLUS ? OUT.MINUS : OUT.PLUS); }}
                             style={{ ...S.btn, padding: "6px 12px", fontSize: 12, background: "transparent", color: COLOR.inkL, border: "1px solid " + COLOR.border, minHeight: 32 }}>Switch</button>
                         </div>
@@ -651,7 +690,7 @@ function TodayTab(props) {
                           {[OUT.PLUS, OUT.MINUS].map(function(val) {
                             return (
                               <button key={val} className="action-btn" onClick={function() { setOutcome(w.code, val); }}
-                                style={{ ...S.btn, padding: "10px 18px", fontSize: 14, background: "transparent", color: COLOR.ink, border: "2px solid " + COLOR.border, borderRadius: 6, fontWeight: 600, minWidth: 80, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                style={{ ...S.btn, ...S.wrapText, padding: "10px 18px", fontSize: 14, background: "transparent", color: COLOR.ink, border: "2px solid " + COLOR.border, borderRadius: 6, fontWeight: 600, minWidth: 80, maxWidth: "100%" }}>
                                 {val === OUT.PLUS ? w.plus : w.minus}
                               </button>
                             );
@@ -661,12 +700,12 @@ function TodayTab(props) {
 
                       <div style={{ fontSize: 11, color: COLOR.inkL, marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", maxWidth: "100%", overflow: "hidden" }}>
                         {lastE && (
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>Previously: <strong style={{ color: COLOR.ink }}>{actionText(w, lastE.outcome)}</strong>
+                          <span style={{ ...S.wrapText, maxWidth: "100%" }}>Previously: <strong style={{ color: COLOR.ink }}>{actionText(w, lastE.outcome)}</strong>
                             <span style={{ opacity: 0.6 }}>{lastE.mode === "C" ? " (assigned)" : " (chosen)"}</span>
                           </span>
                         )}
                         {o && nextA.certain && (
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>If assigned next: <strong style={{ color: COLOR.ink }}>{actionText(w, nextA.outcome)}</strong></span>
+                          <span style={{ ...S.wrapText, maxWidth: "100%" }}>If assigned next: <strong style={{ color: COLOR.ink }}>{actionText(w, nextA.outcome)}</strong></span>
                         )}
                         {o && !nextA.certain && (
                           <span style={{ opacity: 0.6 }}>Next assigned: either</span>
@@ -710,7 +749,7 @@ function TodayTab(props) {
               return (
                 <div key={w.code} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 10px", borderRadius: 6, background: COLOR.ink + "04", minHeight: 44, minWidth: 0 }}>
                   <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 15, color: COLOR.ink, flexShrink: 0, minWidth: 28 }} title={sitTooltip(w)}>{w.code}</span>
-                  <span style={{ fontSize: 13, color: COLOR.inkL, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{w.name}</span>
+                  <span style={{ ...S.wrapText, fontSize: 13, color: COLOR.inkL, flex: 1 }}>{w.name}</span>
                   <span style={{ ...S.tag, background: CAT_COLORS[w.category] + "12", color: CAT_COLORS[w.category], fontSize: 9, flexShrink: 0 }}>{w.category}</span>
                   <button onClick={function() { startEdit(w); }}
                     style={{ background: "none", border: "none", color: COLOR.inkL, cursor: "pointer", fontSize: 13, padding: "4px 6px", opacity: 0.6, minWidth: 32, minHeight: 32, display: "flex", alignItems: "center", justifyContent: "center" }}>{"\u270E"}</button>
@@ -910,7 +949,7 @@ function RecordTab(props) {
                 <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid " + COLOR.borderL }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4, minWidth: 0 }}>
                     <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 18, color: COLOR.ink, flexShrink: 0 }}>{w.code}</span>
-                    <span style={{ fontSize: 14, color: COLOR.inkL, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{w.name}</span>
+                    <span style={{ ...S.wrapText, fontSize: 14, color: COLOR.inkL }}>{w.name}</span>
                     <span style={{ ...S.tag, background: CAT_COLORS[w.category] + "12", color: CAT_COLORS[w.category], fontSize: 9, flexShrink: 0 }}>{w.category}</span>
                   </div>
                   <p style={{ fontSize: 13, color: COLOR.inkL, margin: 0 }}>
@@ -998,9 +1037,15 @@ export default function App() {
   useEffect(function() {
     (async function() {
       var loadedW = null, loadedL = [], loadedT = null;
-      try { var w = await window.storage.get(SKEY.wagers); if (w && w.value) loadedW = JSON.parse(w.value); } catch(e) {}
-      try { var l = await window.storage.get(SKEY.ledger); if (l && l.value) loadedL = JSON.parse(l.value); } catch(e) {}
-      try { var t = await window.storage.get(SKEY.today); if (t && t.value) { var p = JSON.parse(t.value); loadedT = p && p.day ? p : null; } } catch(e) {}
+      var w = await safeStorageGet(SKEY.wagers, "wagers");
+      if (w && w.value) loadedW = safeParseJson(w.value, "wagers", null);
+      var l = await safeStorageGet(SKEY.ledger, "ledger");
+      if (l && l.value) loadedL = safeParseJson(l.value, "ledger", []);
+      var t = await safeStorageGet(SKEY.today, "today");
+      if (t && t.value) {
+        var p = safeParseJson(t.value, "today", null);
+        loadedT = p && p.day ? p : null;
+      }
 
       if (loadedW && loadedT && loadedT.day) {
         var actv = loadedW.filter(function(w) { return !w.removed; });
@@ -1015,7 +1060,7 @@ export default function App() {
         });
         var codes = new Set(actv.map(function(w) { return w.code; }));
         Object.keys(loadedT).forEach(function(k) { if (k !== "day" && !codes.has(k)) { delete loadedT[k]; changed = true; } });
-        if (changed) { try { await window.storage.set(SKEY.today, JSON.stringify(loadedT)); } catch(e) {} }
+        if (changed) { await safeStorageSet(SKEY.today, JSON.stringify(loadedT), "today"); }
       }
 
       setSituations(loadedW);
@@ -1029,15 +1074,23 @@ export default function App() {
 
   var saveSituations = useCallback(async function(s) {
     setSituations(s);
-    try { if (s) { await window.storage.set(SKEY.wagers, JSON.stringify(s)); } else { await window.storage.delete(SKEY.wagers); } } catch(e) {}
+    if (s) {
+      await safeStorageSet(SKEY.wagers, JSON.stringify(s), "wagers");
+    } else {
+      await safeStorageDelete(SKEY.wagers, "wagers");
+    }
   }, []);
   var saveLedger = useCallback(async function(l) {
     setLedger(l);
-    try { await window.storage.set(SKEY.ledger, JSON.stringify(l)); } catch(e) {}
+    await safeStorageSet(SKEY.ledger, JSON.stringify(l), "ledger");
   }, []);
   var saveToday = useCallback(async function(t) {
     setTodayState(t);
-    try { if (t) { await window.storage.set(SKEY.today, JSON.stringify(t)); } else { await window.storage.delete(SKEY.today); } } catch(e) {}
+    if (t) {
+      await safeStorageSet(SKEY.today, JSON.stringify(t), "today");
+    } else {
+      await safeStorageDelete(SKEY.today, "today");
+    }
   }, []);
 
   var switchTab = function(id) { hapticTap(); setTab(id); };
