@@ -30,13 +30,15 @@ npm run preview:host
 ## Deploy to GitHub Pages
 
 1. In GitHub, go to **Settings → Pages** and set **Source** to **GitHub Actions**.
-2. Push to `main`.
-3. The workflow at `.github/workflows/pages.yml` builds the app and deploys `dist/` to Pages.
+2. In **Settings → Pages → Custom domain**, set your domain to `atdu.app` (or another ATDU domain you own).
+3. Set `VITE_BASE_PATH=/` in your workflow/environment before build.
+4. Push to `main`.
+5. The workflow at `.github/workflows/pages.yml` builds the app and deploys `dist/` to Pages.
 
 ### Base path notes (Vite)
 
-- This repo defaults to `base: "/ATDU/"` for repository Pages URLs (`https://<user>.github.io/ATDU/`).
-- If you use a custom domain, set `VITE_BASE_PATH=/` in your workflow/environment before build.
+- Use `base: "/"` for custom-domain URLs like `https://atdu.app/` (no username in the URL).
+- If you deploy to repository Pages instead, set `VITE_BASE_PATH=/ATDU/` before build.
 
 ## Install on iOS
 
