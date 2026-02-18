@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-const DEFAULT_BASE = '/'
+const DEFAULT_BASE = '/ATDU/'
 
 function normalizeBase(basePath) {
   if (!basePath) return DEFAULT_BASE
