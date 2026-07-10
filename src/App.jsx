@@ -84,19 +84,29 @@ button:active:not(:disabled) { transform: scale(0.97); }
 }
 @keyframes coinSpin {
   0% { transform: rotateY(0deg); }
+  86% { transform: rotateY(1834deg); }
   100% { transform: rotateY(1800deg); }
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .stamp { animation: stampIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 .fade { animation: fadeIn 0.4s ease both; }
+.coinWrap { display: flex; justify-content: center; perspective: 700px; }
 .coin3d {
-  width: 64px; height: 64px; border-radius: 50%;
-  border: 2px solid ${C.ink}; background: ${C.paper};
-  display: flex; align-items: center; justify-content: center;
-  font-size: 26px; color: ${C.ink};
+  width: 68px; height: 68px; position: relative;
+  transform-style: preserve-3d;
   animation: coinSpin 1.15s cubic-bezier(0.15, 0.6, 0.25, 1) both;
+  filter: drop-shadow(0 6px 7px ${C.ink}30);
 }
+.coinFace {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: ${C.paper}; border: 2px solid ${C.ink};
+  box-shadow: inset 0 0 0 3px ${C.paper}, inset 0 0 0 4px ${C.ink}55;
+  display: flex; align-items: center; justify-content: center;
+  font-family: ${FONT.serif}; font-size: 24px; color: ${C.ink};
+  backface-visibility: hidden;
+}
+.coinFace.back { transform: rotateY(180deg); }
 .sidebtn { transition: background 0.12s, color 0.12s, border-color 0.12s; }
 `;
 
@@ -109,6 +119,14 @@ function haptic(p) { if (canVibrate) { try { navigator.vibrate(p); } catch { /* 
 
 const normCode = (c) => (c || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 2);
 const sideColor = (s) => (s === "A" ? C.sideA : C.sideB);
+const sideRate = (v) => (v >= 0.5
+  ? { pct: Math.round(v * 100), side: "A" }
+  : { pct: Math.round((1 - v) * 100), side: "B" });
+const fmtSide = (v, dp) => {
+  const m = v >= 0.5 ? v : 1 - v;
+  if (Math.abs(m - 0.5) < 0.0005) return "50%";
+  return (m * 100).toFixed(dp) + "% " + (v >= 0.5 ? "A" : "B");
+};
 const sideText = (w, s) => (s === "A" ? w.a : w.b);
 const todayISO = () => new Date().toISOString();
 
@@ -252,6 +270,12 @@ function FlipOverlay({ dayNumber, wagers, results, onClose }) {
   const r = results[idx] || null;
   const w = r ? wagers.find((x) => x.code === r.code) : null;
 
+  const next = useCallback(() => {
+    clearT();
+    if (idx + 1 < results.length) { setIdx(idx + 1); setPhase("scramble"); }
+    else setPhase("end");
+  }, [idx, results.length]);
+
   const advance = useCallback(() => {
     clearT();
     if (idx + 1 < results.length) {
@@ -286,7 +310,7 @@ function FlipOverlay({ dayNumber, wagers, results, onClose }) {
 
   const tap = () => {
     if (phase === "end") { onClose(); return; }
-    advance();
+    next();
   };
 
   return (
@@ -313,8 +337,11 @@ function FlipOverlay({ dayNumber, wagers, results, onClose }) {
           )}
 
           {phase === "coin" && (
-            <div style={{ display: "flex", justifyContent: "center", marginTop: 22 }}>
-              <div className="coin3d">●</div>
+            <div className="coinWrap" style={{ marginTop: 22 }}>
+              <div className="coin3d">
+                <div className="coinFace">●</div>
+                <div className="coinFace back">○</div>
+              </div>
             </div>
           )}
 
@@ -488,9 +515,15 @@ function TodayTab({ wagers, ledger, day, saveDay, saveLedger, goWagers }) {
       <div style={{ textAlign: "center", margin: "28px 0 8px" }}>
         <button onClick={doFlip} disabled={!canFlip} aria-label="Flip"
           style={{
-            width: 76, height: 76, borderRadius: "50%", border: "none",
-            background: canFlip ? C.ink : C.border, color: C.paper,
-            fontSize: 26, cursor: canFlip ? "pointer" : "default",
+            width: 78, height: 78, borderRadius: "50%",
+            border: "2px solid " + (canFlip ? C.ink : C.border),
+            background: C.paper,
+            boxShadow: canFlip
+              ? `inset 0 0 0 3px ${C.paper}, inset 0 0 0 4px ${C.ink}55, 0 4px 6px ${C.ink}22`
+              : `inset 0 0 0 3px ${C.paper}, inset 0 0 0 4px ${C.border}`,
+            color: canFlip ? C.ink : C.border,
+            fontSize: 26, fontFamily: FONT.serif,
+            cursor: canFlip ? "pointer" : "default",
             display: "inline-flex", alignItems: "center", justifyContent: "center",
           }}>
           ●
@@ -653,9 +686,11 @@ function Band({ pHat, piHat }) {
         )}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.inkL }}>
-        <span>0</span><span style={{ position: "relative", left: "-6%" }}>2/7</span>
+        <span style={{ color: C.sideB, fontWeight: 700 }}>B</span>
+        <span style={{ position: "relative", left: "-6%" }}>2/7</span>
         <span>1/2</span>
-        <span style={{ position: "relative", right: "-4%" }}>5/7</span><span>1</span>
+        <span style={{ position: "relative", right: "-4%" }}>5/7</span>
+        <span style={{ color: C.sideA, fontWeight: 700 }}>A</span>
       </div>
     </div>
   );
@@ -771,8 +806,12 @@ function LedgerTab({ wagers, ledger }) {
             <span>open <strong style={{ color: C.ink, fontSize: 15 }}>{st.nO}</strong></span>
             <span>constrained <strong style={{ color: C.ink, fontSize: 15 }}>{st.nC}</strong></span>
             <span>null <strong style={{ color: C.ink, fontSize: 15 }}>{st.nNull}</strong></span>
-            {st.pHat != null && <span title="open-resolution rate to A">p̂ <strong style={{ color: C.ink, fontSize: 15 }}>{(st.pHat * 100).toFixed(0)}%</strong></span>}
-            {st.piHat != null && <span title="ledger rate to A">π̂ <strong style={{ color: C.ink, fontSize: 15 }}>{(st.piHat * 100).toFixed(0)}%</strong></span>}
+            {st.pHat != null && (() => { const r = sideRate(st.pHat); return (
+              <span title="open-resolution rate">p̂ <strong style={{ color: C.ink, fontSize: 15 }}>{r.pct}% <span style={{ color: sideColor(r.side) }}>{r.side}</span></strong></span>
+            ); })()}
+            {st.piHat != null && (() => { const r = sideRate(st.piHat); return (
+              <span title="ledger rate">π̂ <strong style={{ color: C.ink, fontSize: 15 }}>{r.pct}% <span style={{ color: sideColor(r.side) }}>{r.side}</span></strong></span>
+            ); })()}
           </div>
 
           <Band pHat={st.pHat} piHat={st.piHat} />
@@ -856,8 +895,8 @@ function SystemTab({ onReset }) {
       <div style={S.card}>
         <h3 style={S.h3}>Simulation</h3>
         <p style={{ ...S.muted, marginBottom: 14 }}>
-          The rule is deterministic. The coin is uniform. p is the open-resolution rate toward side A.
-          One year at p = 0, ¼, ½, ¾, 1.
+          The rule is deterministic. The coin is uniform. The open-resolution lean is swept from all B to all A.
+          One year each.
         </p>
         <div style={{ textAlign: "center", marginBottom: sim ? 16 : 0 }}>
           <button onClick={() => setRunId((s) => s + 1)}
@@ -888,17 +927,19 @@ function SystemTab({ onReset }) {
             <table style={{ width: "100%", marginTop: 10, fontSize: 12, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ color: C.inkL }}>
-                  <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600 }}>p</th>
-                  <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>π̂ (365)</th>
-                  <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>(2+3p)/7</th>
+                  <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600 }}>open lean</th>
+                  <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>ledger π̂ (365)</th>
+                  <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>theory</th>
                 </tr>
               </thead>
               <tbody>
                 {sim.map((s, i) => (
                   <tr key={s.p} style={{ borderTop: "1px solid " + C.borderL }}>
-                    <td style={{ padding: "5px 6px", color: SIM_COLORS[i], fontWeight: 700 }}>{s.p}</td>
-                    <td style={{ padding: "5px 6px", textAlign: "right" }}>{(s.series[364].pi * 100).toFixed(1)}%</td>
-                    <td style={{ padding: "5px 6px", textAlign: "right", color: C.inkL }}>{(piTheory(s.p) * 100).toFixed(1)}%</td>
+                    <td style={{ padding: "5px 6px", color: SIM_COLORS[i], fontWeight: 700 }}>
+                      {s.p === 0.5 ? "50 / 50" : fmtSide(s.p, 0)}
+                    </td>
+                    <td style={{ padding: "5px 6px", textAlign: "right" }}>{fmtSide(s.series[364].pi, 1)}</td>
+                    <td style={{ padding: "5px 6px", textAlign: "right", color: C.inkL }}>{fmtSide(piTheory(s.p), 1)}</td>
                   </tr>
                 ))}
               </tbody>
