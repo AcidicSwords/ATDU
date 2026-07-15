@@ -1,1046 +1,1382 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, ReferenceLine,
-} from "recharts";
-import {
-  flipDay, reconciled, unresolvedCount, commitDay, stats,
-  simulate, piTheory, PI_MIN, PI_MAX, exportText,
+  commitDay,
+  exportText,
+  flipDay,
+  memory,
+  reconciled,
+  unresolvedCount,
 } from "./engine.js";
+import "./App.css";
 
-/* ═══════════════════════════════════════════════════
-   TOKENS
-   ═══════════════════════════════════════════════════ */
-
-const C = {
-  paper: "#f5f0e8",
-  ink: "#2c2416",
-  inkL: "#6b5d4d",
-  sideA: "#4E6E8E",
-  sideB: "#8E6E4E",
-  gold: "#b68d40",
-  border: "#d4c9b8",
-  borderL: "#e8e0d2",
-  white: "#ffffff",
-  red: "#8A6565",
+const STORAGE_KEYS = {
+  wagers: "atdu2-w",
+  ledger: "atdu2-l",
+  day: "atdu2-d",
 };
 
-const FONT = {
-  serif: "'Crimson Pro', Georgia, serif",
-  sans: "'Source Sans 3', 'Helvetica Neue', sans-serif",
-};
-
-const SKEY = { wagers: "atdu2-w", ledger: "atdu2-l", day: "atdu2-d" };
-
-const S = {
-  h3: { fontFamily: FONT.serif, fontSize: 19, fontWeight: 600, margin: "0 0 12px", color: C.ink },
-  muted: { fontSize: 13, lineHeight: 1.6, color: C.inkL },
-  card: { background: C.white, border: "1px solid " + C.border, borderRadius: 8, padding: 20, marginBottom: 16 },
-  btn: {
-    fontFamily: FONT.sans, fontSize: 14, fontWeight: 600,
-    padding: "12px 24px", borderRadius: 6, border: "none",
-    cursor: "pointer", minHeight: 44,
+const STRUCTURES = [
+  {
+    key: "NOT",
+    label: "Negation",
+    description: "One act, positively enacted or positively not enacted.",
   },
-  ghostBtn: {
-    fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-    padding: "8px 16px", borderRadius: 6, cursor: "pointer", minHeight: 36,
-    background: "transparent", color: C.inkL, border: "1px solid " + C.border,
+  {
+    key: "BIFURCATION",
+    label: "Bifurcation",
+    description: "One consequence, produced through two routes.",
   },
-  input: {
-    fontFamily: FONT.sans, fontSize: 16, padding: "10px 12px",
-    border: "1px solid " + C.border, borderRadius: 5,
-    background: C.white, color: C.ink, outline: "none",
-    width: "100%", boxSizing: "border-box",
+  {
+    key: "ASYMPTOTE",
+    label: "Asymptote",
+    description: "One measure, constrained toward a shared boundary.",
   },
-  label: {
-    fontSize: 11, fontWeight: 600, color: C.inkL,
-    textTransform: "uppercase", letterSpacing: "0.05em",
-    display: "block", marginBottom: 4,
+  {
+    key: "PRECEDENCE",
+    label: "Precedence",
+    description: "One act, positioned around a shared anchor.",
   },
-  wrap: { overflowWrap: "anywhere", wordBreak: "break-word", minWidth: 0 },
-  modeTag: {
-    fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
-    textTransform: "uppercase", flexShrink: 0,
-  },
-};
-
-const GLOBAL_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap');
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #root { min-height: 100%; }
-html { -webkit-text-size-adjust: 100%; }
-body { background: ${C.paper}; color: ${C.ink}; -webkit-tap-highlight-color: transparent; }
-button, input { font: inherit; touch-action: manipulation; }
-input { font-size: 16px !important; }
-input:focus { border-color: ${C.gold} !important; box-shadow: 0 0 0 2px ${C.gold}30; }
-::selection { background: ${C.gold}26; }
-button { -webkit-user-select: none; user-select: none; }
-button:active:not(:disabled) { transform: scale(0.97); }
-
-@keyframes stampIn {
-  0% { transform: scale(0.92); opacity: 0; }
-  60% { transform: scale(1.03); }
-  100% { transform: scale(1); opacity: 1; }
-}
-@keyframes coinSpin {
-  0% { transform: rotateY(0deg); }
-  86% { transform: rotateY(1834deg); }
-  100% { transform: rotateY(1800deg); }
-}
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-.stamp { animation: stampIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
-.fade { animation: fadeIn 0.4s ease both; }
-.coinWrap { display: flex; justify-content: center; perspective: 700px; }
-.coin3d {
-  width: 68px; height: 68px; position: relative;
-  transform-style: preserve-3d;
-  animation: coinSpin 1.15s cubic-bezier(0.15, 0.6, 0.25, 1) both;
-  filter: drop-shadow(0 6px 7px ${C.ink}30);
-}
-.coinFace {
-  position: absolute; inset: 0; border-radius: 50%;
-  background: ${C.paper}; border: 2px solid ${C.ink};
-  box-shadow: inset 0 0 0 3px ${C.paper}, inset 0 0 0 4px ${C.ink}55;
-  display: flex; align-items: center; justify-content: center;
-  font-family: ${FONT.serif}; font-size: 24px; color: ${C.ink};
-  backface-visibility: hidden;
-}
-.coinFace.back { transform: rotateY(180deg); }
-.sidebtn { transition: background 0.12s, color 0.12s, border-color 0.12s; }
-`;
-
-/* ═══════════════════════════════════════════════════
-   HELPERS
-   ═══════════════════════════════════════════════════ */
-
-const canVibrate = typeof navigator !== "undefined" && "vibrate" in navigator;
-function haptic(p) { if (canVibrate) { try { navigator.vibrate(p); } catch { /* no-op */ } } }
-
-const normCode = (c) => (c || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 2);
-const sideColor = (s) => (s === "A" ? C.sideA : C.sideB);
-const sideRate = (v) => (v >= 0.5
-  ? { pct: Math.round(v * 100), side: "A" }
-  : { pct: Math.round((1 - v) * 100), side: "B" });
-const fmtSide = (v, dp) => {
-  const m = v >= 0.5 ? v : 1 - v;
-  if (Math.abs(m - 0.5) < 0.0005) return "50%";
-  return (m * 100).toFixed(dp) + "% " + (v >= 0.5 ? "A" : "B");
-};
-const sideText = (w, s) => (s === "A" ? w.a : w.b);
-const todayISO = () => new Date().toISOString();
-
-async function sGet(key) {
-  try { const r = await window.storage.get(key); return r && r.value ? r.value : null; }
-  catch { return null; }
-}
-async function sSet(key, value) {
-  try { await window.storage.set(key, value); } catch { /* no-op */ }
-}
-async function sDel(key) {
-  try { await window.storage.delete(key); } catch { /* no-op */ }
-}
-function parse(raw, fb) { try { return JSON.parse(raw); } catch { return fb; } }
-
-/* ═══════════════════════════════════════════════════
-   WAGER FORM — the four complement structures as guides
-   ═══════════════════════════════════════════════════ */
-
-const TYPES = [
-  { key: "NOT", line: "One act: enact it, or do not.", pa: "X", pb: "not X" },
-  { key: "BIFURCATION", line: "Same consequence, different path.", pa: "X via Y", pb: "X via Z" },
-  { key: "ASYMPTOTE", line: "Extent against a boundary — the measure is in the act.", pa: "X at most n", pb: "X at least n" },
-  { key: "PRECEDENCE", line: "Position against an anchor outside the act.", pa: "X before the anchor", pb: "X after the anchor" },
 ];
 
-function WagerForm({ draft, onChange, onSubmit, onCancel, onRetire, lockCode, submitLabel }) {
-  const set = (f, v) => onChange({ ...draft, [f]: v });
-  const t = TYPES.find((x) => x.key === draft.type) || null;
-  const valid = normCode(draft.code) && draft.name.trim() && draft.a.trim() && draft.b.trim();
+const EMPTY_DRAFT = {
+  code: "",
+  name: "",
+  type: "NOT",
+  act: "",
+  consequence: "",
+  routeA: "",
+  routeB: "",
+  measure: "",
+  boundary: "",
+  unit: "",
+  anchor: "",
+  exactA: "",
+  exactB: "",
+  exact: false,
+};
+
+const canVibrate =
+  typeof navigator !== "undefined" && "vibrate" in navigator;
+
+function haptic(pattern) {
+  if (!canVibrate) return;
+  try {
+    navigator.vibrate(pattern);
+  } catch {
+    // Haptics are optional.
+  }
+}
+
+function parse(raw, fallback) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+async function storageGet(key) {
+  try {
+    const value = await window.storage.get(key);
+    return value?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function storageSet(key, value) {
+  try {
+    await window.storage.set(key, value);
+  } catch {
+    // The interface remains usable if persistence is unavailable.
+  }
+}
+
+async function storageDelete(key) {
+  try {
+    await window.storage.delete(key);
+  } catch {
+    // No-op.
+  }
+}
+
+function normalizeCode(value) {
+  return (value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 2);
+}
+
+function todayISO() {
+  return new Date().toISOString();
+}
+
+function sideText(wager, side) {
+  return side === "A" ? wager.a : wager.b;
+}
+
+function resolutionCode(entry) {
+  if (!entry || entry.null) return "∅";
+  return `${entry.mode}${entry.side}`;
+}
+
+function draftFromWager(wager) {
+  const schema = wager.schema || {};
+  return {
+    ...EMPTY_DRAFT,
+    code: wager.code,
+    name: wager.name,
+    type: wager.type || "NOT",
+    act: schema.act || "",
+    consequence: schema.consequence || "",
+    routeA: schema.routeA || "",
+    routeB: schema.routeB || "",
+    measure: schema.measure || "",
+    boundary: schema.boundary || "",
+    unit: schema.unit || "",
+    anchor: schema.anchor || "",
+    exactA: wager.a || "",
+    exactB: wager.b || "",
+    exact: !wager.schema,
+  };
+}
+
+function generatedSides(draft) {
+  if (draft.exact) {
+    return { a: draft.exactA.trim(), b: draft.exactB.trim() };
+  }
+
+  switch (draft.type) {
+    case "NOT": {
+      const act = draft.act.trim();
+      return {
+        a: act ? `Do ${act}` : "",
+        b: act ? `Do not ${act}` : "",
+      };
+    }
+    case "BIFURCATION": {
+      const consequence = draft.consequence.trim();
+      const routeA = draft.routeA.trim();
+      const routeB = draft.routeB.trim();
+      return {
+        a: consequence && routeA ? `${consequence} through ${routeA}` : "",
+        b: consequence && routeB ? `${consequence} through ${routeB}` : "",
+      };
+    }
+    case "ASYMPTOTE": {
+      const measure = draft.measure.trim();
+      const boundary = draft.boundary.trim();
+      const unit = draft.unit.trim();
+      const amount = [boundary, unit].filter(Boolean).join(" ");
+      return {
+        a: measure && amount ? `${measure} at most ${amount}` : "",
+        b: measure && amount ? `${measure} at least ${amount}` : "",
+      };
+    }
+    case "PRECEDENCE": {
+      const act = draft.act.trim();
+      const anchor = draft.anchor.trim();
+      return {
+        a: act && anchor ? `${act} before ${anchor}` : "",
+        b: act && anchor ? `${act} after ${anchor}` : "",
+      };
+    }
+    default:
+      return { a: "", b: "" };
+  }
+}
+
+function schemaFromDraft(draft) {
+  if (draft.exact) return null;
+  if (draft.type === "NOT") return { act: draft.act.trim() };
+  if (draft.type === "BIFURCATION") {
+    return {
+      consequence: draft.consequence.trim(),
+      routeA: draft.routeA.trim(),
+      routeB: draft.routeB.trim(),
+    };
+  }
+  if (draft.type === "ASYMPTOTE") {
+    return {
+      measure: draft.measure.trim(),
+      boundary: draft.boundary.trim(),
+      unit: draft.unit.trim(),
+    };
+  }
+  return {
+    act: draft.act.trim(),
+    anchor: draft.anchor.trim(),
+  };
+}
+
+function Field({ label, children, hint }) {
+  return (
+    <label className="field">
+      <span className="field__label">{label}</span>
+      {children}
+      {hint ? <span className="field__hint">{hint}</span> : null}
+    </label>
+  );
+}
+
+function WagerGeometry({ wager, compact = false, activeSide = null }) {
+  const schema = wager.schema || {};
+  const type = wager.type || "NOT";
+
+  let left = "A";
+  let center = wager.name;
+  let right = "B";
+  let leftDetail = wager.a;
+  let rightDetail = wager.b;
+
+  if (type === "NOT" && schema.act) {
+    left = "Do";
+    center = schema.act;
+    right = "Do not";
+    leftDetail = wager.a;
+    rightDetail = wager.b;
+  } else if (type === "BIFURCATION" && schema.consequence) {
+    left = schema.routeA || "A";
+    center = schema.consequence;
+    right = schema.routeB || "B";
+  } else if (type === "ASYMPTOTE" && schema.boundary) {
+    left = "At most";
+    center = [schema.boundary, schema.unit].filter(Boolean).join(" ");
+    right = "At least";
+    leftDetail = wager.a;
+    rightDetail = wager.b;
+  } else if (type === "PRECEDENCE" && schema.anchor) {
+    left = "Before";
+    center = schema.anchor;
+    right = "After";
+    leftDetail = wager.a;
+    rightDetail = wager.b;
+  }
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ width: 64, flexShrink: 0 }}>
-          <label style={S.label}>Code</label>
-          <input
-            style={{ ...S.input, textAlign: "center", fontWeight: 700, textTransform: "uppercase", opacity: lockCode ? 0.6 : 1 }}
-            maxLength={2} value={draft.code} disabled={lockCode}
-            onChange={(e) => set("code", normCode(e.target.value))} placeholder="W" />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <label style={S.label}>Situation</label>
-          <input style={S.input} value={draft.name}
-            onChange={(e) => set("name", e.target.value)} placeholder="One situation" />
-        </div>
+    <div
+      className={`wager-geometry wager-geometry--${type.toLowerCase()} ${
+        compact ? "wager-geometry--compact" : ""
+      }`}
+      aria-label={`Side A: ${wager.a}. Side B: ${wager.b}.`}
+    >
+      <div
+        className={`wager-geometry__side wager-geometry__side--a ${
+          activeSide === "A" ? "is-active" : ""
+        }`}
+      >
+        <span className="wager-geometry__marker">A</span>
+        <strong>{left}</strong>
+        {!compact ? <small>{leftDetail}</small> : null}
       </div>
 
-      <div>
-        <label style={S.label}>Structure</label>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {TYPES.map((x) => (
-            <button key={x.key} onClick={() => { haptic(10); set("type", draft.type === x.key ? null : x.key); }}
-              style={{
-                ...S.ghostBtn, padding: "6px 12px", fontSize: 11, letterSpacing: "0.05em",
-                background: draft.type === x.key ? C.ink : "transparent",
-                color: draft.type === x.key ? C.paper : C.inkL,
-                borderColor: draft.type === x.key ? C.ink : C.border,
-              }}>
-              {x.key}
+      <div className="wager-geometry__axis" aria-hidden="true">
+        <i />
+        <span>{center}</span>
+        <i />
+      </div>
+
+      <div
+        className={`wager-geometry__side wager-geometry__side--b ${
+          activeSide === "B" ? "is-active" : ""
+        }`}
+      >
+        <span className="wager-geometry__marker">B</span>
+        <strong>{right}</strong>
+        {!compact ? <small>{rightDetail}</small> : null}
+      </div>
+    </div>
+  );
+}
+
+function WagerBuilder({ initial, existingCodes, onPlace, onCancel, title }) {
+  const [draft, setDraft] = useState(initial || EMPTY_DRAFT);
+  const sides = generatedSides(draft);
+  const normalizedCode = normalizeCode(draft.code);
+  const duplicate =
+    !initial && existingCodes.some((code) => code === normalizedCode);
+  const valid =
+    normalizedCode &&
+    draft.name.trim() &&
+    sides.a &&
+    sides.b &&
+    !duplicate;
+
+  const preview = {
+    code: normalizedCode || "—",
+    name: draft.name.trim() || "Situation",
+    type: draft.type,
+    a: sides.a || "Side A",
+    b: sides.b || "Side B",
+    schema: schemaFromDraft(draft),
+  };
+
+  const set = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+
+  function submit(event) {
+    event.preventDefault();
+    if (!valid) return;
+    haptic([16, 28]);
+    onPlace({
+      code: normalizedCode,
+      name: draft.name.trim(),
+      type: draft.type,
+      a: sides.a,
+      b: sides.b,
+      schema: schemaFromDraft(draft),
+      retired: false,
+    });
+  }
+
+  return (
+    <form className="builder" onSubmit={submit}>
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">Wager</span>
+          <h2>{title || "Place Wager"}</h2>
+        </div>
+        {onCancel ? (
+          <button className="icon-button" type="button" onClick={onCancel} aria-label="Close">
+            ×
+          </button>
+        ) : null}
+      </div>
+
+      <div className="builder__identity">
+        <Field label="Code">
+          <input
+            value={draft.code}
+            onChange={(event) => set("code", normalizeCode(event.target.value))}
+            maxLength={2}
+            disabled={Boolean(initial)}
+            inputMode="text"
+            autoCapitalize="characters"
+          />
+        </Field>
+        <Field label="Situation" hint="The bounded circumstance in which this Wager exists.">
+          <input
+            value={draft.name}
+            onChange={(event) => set("name", event.target.value)}
+            placeholder="Work lunch"
+          />
+        </Field>
+      </div>
+
+      <fieldset className="structure-picker">
+        <legend>Structure</legend>
+        <div className="structure-picker__grid">
+          {STRUCTURES.map((structure) => (
+            <button
+              key={structure.key}
+              type="button"
+              className={draft.type === structure.key ? "is-selected" : ""}
+              onClick={() => {
+                haptic(8);
+                setDraft((current) => ({ ...current, type: structure.key, exact: false }));
+              }}
+            >
+              <strong>{structure.label}</strong>
+              <span>{structure.description}</span>
             </button>
           ))}
         </div>
-        {t && <p style={{ ...S.muted, fontSize: 12, margin: "6px 0 0" }}>{t.line}</p>}
-      </div>
+      </fieldset>
 
-      <div>
-        <label style={S.label}>Two sides — one situation, one differentiator, both realizable</label>
-        <div style={{ display: "grid", gap: 8 }}>
-          <input style={{ ...S.input, borderLeft: "3px solid " + C.sideA }} value={draft.a}
-            onChange={(e) => set("a", e.target.value)} placeholder={t ? t.pa : "Side A"} />
-          <input style={{ ...S.input, borderLeft: "3px solid " + C.sideB }} value={draft.b}
-            onChange={(e) => set("b", e.target.value)} placeholder={t ? t.pb : "Side B"} />
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-        {onRetire && (
-          <button onClick={onRetire} style={{ ...S.ghostBtn, color: C.red, borderColor: C.red + "40", marginRight: "auto" }}>
-            Retire
-          </button>
-        )}
-        {onCancel && <button onClick={onCancel} style={S.ghostBtn}>Cancel</button>}
-        <button onClick={onSubmit} disabled={!valid}
-          style={{ ...S.btn, background: valid ? C.ink : C.border, color: C.paper, fontSize: 13, padding: "8px 20px", cursor: valid ? "pointer" : "default" }}>
-          {submitLabel || "Add"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════
-   FLIP OVERLAY — Flip One: environmental. Flip Two: the coin.
-   ═══════════════════════════════════════════════════ */
-
-const GLYPHS = "◦●○◍◌∴∵·×+—";
-
-function Scramble({ final, color, onDone }) {
-  const [text, setText] = useState("");
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    let frame = 0;
-    let delay = 36;
-    let t = null;
-    const tick = () => {
-      frame++;
-      if (frame > 12) {
-        setText(final);
-        setDone(true);
-        haptic([15, 25]);
-        onDone && onDone();
-        return;
-      }
-      let s = "";
-      for (let i = 0; i < final.length; i++) s += GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
-      setText(s);
-      delay *= 1.16; // deceleration: anticipation ramps as resolution approaches
-      t = setTimeout(tick, delay);
-    };
-    t = setTimeout(tick, delay);
-    return () => clearTimeout(t);
-  }, [final, onDone]);
-  return (
-    <div style={{
-      fontFamily: FONT.serif, fontSize: 26, fontWeight: 700, letterSpacing: "0.12em",
-      color: done ? color : C.inkL, minHeight: 40, textAlign: "center",
-    }}>
-      {text}
-    </div>
-  );
-}
-
-function FlipOverlay({ dayNumber, wagers, results, onClose }) {
-  // results: [{ code, mode, side, seed }]
-  const [idx, setIdx] = useState(0);
-  const [phase, setPhase] = useState("scramble"); // scramble | coin | landed | end
-  const timer = useRef(null);
-  const clearT = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
-
-  const r = results[idx] || null;
-  const w = r ? wagers.find((x) => x.code === r.code) : null;
-
-  const next = useCallback(() => {
-    clearT();
-    if (idx + 1 < results.length) { setIdx(idx + 1); setPhase("scramble"); }
-    else setPhase("end");
-  }, [idx, results.length]);
-
-  const advance = useCallback(() => {
-    clearT();
-    if (idx + 1 < results.length) {
-      setPhase("breath");
-      timer.current = setTimeout(() => { setIdx(idx + 1); setPhase("scramble"); }, 340);
-    } else setPhase("end");
-  }, [idx, results.length]);
-
-  const onScrambleDone = useCallback(() => {
-    clearT();
-    if (r && r.mode === "C" && r.side) {
-      timer.current = setTimeout(() => setPhase("coin"), 350);
-    } else {
-      setPhase("landed");
-      timer.current = setTimeout(advance, 900);
-    }
-  }, [r, advance]);
-
-  useEffect(() => {
-    if (phase === "coin") {
-      clearT();
-      timer.current = setTimeout(() => {
-        haptic([20, 40, 60]);
-        setPhase("landed");
-        timer.current = setTimeout(advance, 1050);
-      }, 1180);
-    }
-    return clearT;
-  }, [phase, advance]);
-
-  useEffect(() => () => clearT(), []);
-
-  const tap = () => {
-    if (phase === "end") { onClose(); return; }
-    next();
-  };
-
-  return (
-    <div onClick={tap} style={{
-      position: "fixed", inset: 0, background: C.paper, zIndex: 50,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      padding: 24, cursor: "pointer",
-    }}>
-      {phase === "end" || !r ? (
-        <div className="stamp" style={{ textAlign: "center" }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 30, fontWeight: 700, color: C.ink }}>Day {dayNumber}</div>
-          <div style={{ ...S.muted, marginTop: 10 }}>tap to close</div>
-        </div>
-      ) : (
-        <div style={{ textAlign: "center", maxWidth: 480, width: "100%" }}>
-          <div style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 20, color: C.ink }}>{r.code}</div>
-          {w && <div style={{ ...S.muted, ...S.wrap, marginBottom: 22 }}>{w.name}</div>}
-
-          {phase === "breath" ? (
-            <div style={{ minHeight: 40 }} />
-          ) : (
-            <Scramble key={idx} final={r.mode === "O" ? "OPEN" : "CONSTRAINED"}
-              color={r.mode === "O" ? C.gold : C.ink} onDone={onScrambleDone} />
-          )}
-
-          {phase === "coin" && (
-            <div className="coinWrap" style={{ marginTop: 22 }}>
-              <div className="coin3d">
-                <div className="coinFace">●</div>
-                <div className="coinFace back">○</div>
-              </div>
-            </div>
-          )}
-
-          {phase === "landed" && (
-            <div style={{ marginTop: 22, minHeight: 34 }}>
-              {r.mode === "C" && r.side && w && (
-                <div className="stamp" style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 19, color: C.ink, ...S.wrap }}>
-                  {sideText(w, r.side)}
-                </div>
-              )}
-              {r.mode === "C" && r.seed && (
-                <div className="fade" style={{ ...S.muted }}>first — resolve today</div>
-              )}
-              {r.mode === "O" && (
-                <div className="fade" style={{ ...S.muted }}>resolve today</div>
-              )}
-            </div>
-          )}
-
-          <div style={{ ...S.muted, fontSize: 11, marginTop: 36, opacity: 0.6 }}>
-            {idx + 1} / {results.length} · tap to advance
+      <div className="builder__definition">
+        {draft.exact ? (
+          <div className="builder__two-fields">
+            <Field label="Side A">
+              <input
+                value={draft.exactA}
+                onChange={(event) => set("exactA", event.target.value)}
+              />
+            </Field>
+            <Field label="Side B">
+              <input
+                value={draft.exactB}
+                onChange={(event) => set("exactB", event.target.value)}
+              />
+            </Field>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
+        ) : null}
 
-/* ═══════════════════════════════════════════════════
-   TODAY
-   ═══════════════════════════════════════════════════ */
+        {!draft.exact && draft.type === "NOT" ? (
+          <Field label="Act" hint="The same act is positively enacted or positively not enacted.">
+            <input
+              value={draft.act}
+              onChange={(event) => set("act", event.target.value)}
+              placeholder="buy lunch"
+            />
+          </Field>
+        ) : null}
 
-function TodayTab({ wagers, ledger, day, saveDay, saveLedger, goWagers }) {
-  const [overlay, setOverlay] = useState(null); // { dayNumber, results }
-  const [landed, setLanded] = useState(false);
-  const active = wagers.filter((w) => !w.retired);
-  const inDay = day ? active.filter((w) => day.wagers[w.code]) : [];
-  const pending = day ? active.filter((w) => !day.wagers[w.code]) : [];
-
-  const setSide = (code, side) => {
-    haptic(12);
-    const cur = day.wagers[code];
-    saveDay({ ...day, wagers: { ...day.wagers, [code]: { ...cur, side, nulled: false } } });
-  };
-  const setNull = (code, nulled) => {
-    haptic(10);
-    const cur = day.wagers[code];
-    const next = { ...cur, nulled };
-    if (nulled && (cur.mode === "O" || cur.seed)) next.side = null;
-    saveDay({ ...day, wagers: { ...day.wagers, [code]: next } });
-  };
-
-  const doFlip = () => {
-    if (day && !reconciled(day)) return;
-    haptic([40, 30, 40]);
-    const newLedger = day ? commitDay(day, ledger) : ledger;
-    const flipped = flipDay(active.map((w) => w.code), newLedger);
-    const nextNumber = (day ? day.day : newLedger.length) + 1;
-    const nextDay = { day: nextNumber, date: todayISO(), wagers: flipped };
-    saveLedger(newLedger);
-    saveDay(nextDay);
-    setOverlay({
-      dayNumber: nextNumber,
-      results: active.map((w) => ({ code: w.code, ...flipped[w.code] })),
-    });
-  };
-
-  if (!active.length) {
-    return (
-      <div style={{ textAlign: "center", padding: "60px 20px" }}>
-        <p style={{ ...S.muted, marginBottom: 20 }}>No wagers.</p>
-        <button onClick={goWagers} style={{ ...S.btn, background: C.ink, color: C.paper }}>Wagers</button>
-      </div>
-    );
-  }
-
-  const remaining = unresolvedCount(day);
-  const canFlip = !day || remaining === 0;
-
-  return (
-    <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      {day && (
-        <div style={{ textAlign: "center", margin: "24px 0 16px" }}>
-          <span style={{ fontFamily: FONT.serif, fontSize: 15, color: C.inkL, letterSpacing: "0.04em" }}>
-            Day {day.day}
-          </span>
-        </div>
-      )}
-
-      {!day && (
-        <div style={{ textAlign: "center", padding: "40px 0 24px" }}>
-          <p style={{ ...S.muted, marginBottom: 20 }}>Day 1 has not been flipped.</p>
-        </div>
-      )}
-
-      <div style={{ display: "grid", gap: 12 }}>
-        {inDay.map((w, wi) => {
-          const st = day.wagers[w.code];
-          const openLike = st.mode === "O" || (st.seed && !st.nulled);
-          return (
-            <div key={w.code} className={landed ? "stamp" : undefined}
-              style={{ ...S.card, marginBottom: 0, opacity: st.nulled ? 0.55 : 1, animationDelay: landed ? (wi * 70) + "ms" : undefined }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10, minWidth: 0 }}>
-                <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 17, flexShrink: 0 }}>{w.code}</span>
-                <span style={{ ...S.muted, ...S.wrap, flex: 1 }}>{w.name}</span>
-                <span style={{
-                  ...S.modeTag,
-                  color: st.nulled ? C.inkL : st.mode === "O" ? C.gold : C.inkL,
-                }}>
-                  {st.nulled ? "null" : st.mode === "O" ? "open" : st.seed ? "constrained · first" : "constrained"}
-                </span>
-              </div>
-
-              {st.nulled ? (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ ...S.muted }}>No step.</span>
-                  <button onClick={() => setNull(w.code, false)} style={{ ...S.ghostBtn, padding: "6px 12px", fontSize: 12, minHeight: 32 }}>Undo</button>
-                </div>
-              ) : openLike ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {["A", "B"].map((s) => {
-                    const sel = st.side === s;
-                    return (
-                      <button key={s} className="sidebtn" onClick={() => setSide(w.code, s)}
-                        style={{
-                          ...S.btn, ...S.wrap, textAlign: "left", fontWeight: 600, fontSize: 14,
-                          background: sel ? C.ink : "transparent",
-                          color: sel ? C.paper : C.ink,
-                          border: "2px solid " + (sel ? C.ink : C.border),
-                          borderLeft: "4px solid " + sideColor(s),
-                          whiteSpace: "normal",
-                        }}>
-                        {sideText(w, s)}
-                      </button>
-                    );
-                  })}
-                  <div style={{ textAlign: "right" }}>
-                    <button onClick={() => setNull(w.code, true)}
-                      style={{ background: "none", border: "none", color: C.inkL, fontSize: 12, cursor: "pointer", padding: "4px 2px", fontFamily: FONT.sans }}>
-                      Null
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <div style={{
-                    fontFamily: FONT.serif, fontWeight: 700, fontSize: 17, ...S.wrap,
-                    borderLeft: "4px solid " + sideColor(st.side), paddingLeft: 10,
-                  }}>
-                    {sideText(w, st.side)}
-                  </div>
-                  <div style={{ textAlign: "right", marginTop: 6 }}>
-                    <button onClick={() => setNull(w.code, true)}
-                      style={{ background: "none", border: "none", color: C.inkL, fontSize: 12, cursor: "pointer", padding: "4px 2px", fontFamily: FONT.sans }}>
-                      Null
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {pending.length > 0 && day && (
-        <p style={{ ...S.muted, fontSize: 12, textAlign: "center", marginTop: 12 }}>
-          Enters at the next flip: {pending.map((w) => w.code).join(" · ")}
-        </p>
-      )}
-
-      <div style={{ textAlign: "center", margin: "28px 0 8px" }}>
-        <button onClick={doFlip} disabled={!canFlip} aria-label="Flip"
-          style={{
-            width: 78, height: 78, borderRadius: "50%",
-            border: "2px solid " + (canFlip ? C.ink : C.border),
-            background: C.paper,
-            boxShadow: canFlip
-              ? `inset 0 0 0 3px ${C.paper}, inset 0 0 0 4px ${C.ink}55, 0 4px 6px ${C.ink}22`
-              : `inset 0 0 0 3px ${C.paper}, inset 0 0 0 4px ${C.border}`,
-            color: canFlip ? C.ink : C.border,
-            fontSize: 26, fontFamily: FONT.serif,
-            cursor: canFlip ? "pointer" : "default",
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-          }}>
-          ●
-        </button>
-        <p style={{ fontFamily: FONT.serif, fontSize: 14, color: canFlip ? C.ink : C.inkL, marginTop: 8, letterSpacing: "0.03em" }}>
-          Flip — Day {(day ? day.day : ledger.length) + 1}
-        </p>
-        {!canFlip && (
-          <p style={{ ...S.muted, fontSize: 12, marginTop: 4 }}>
-            {remaining} unresolved — every wager needs a side or null.
-          </p>
-        )}
-      </div>
-
-      <div style={{ height: 32 }} />
-      {overlay && (
-        <FlipOverlay dayNumber={overlay.dayNumber} wagers={wagers}
-          results={overlay.results}
-          onClose={() => { setOverlay(null); setLanded(true); setTimeout(() => setLanded(false), 800); }} />
-      )}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════
-   WAGERS
-   ═══════════════════════════════════════════════════ */
-
-const EMPTY_DRAFT = { code: "", name: "", a: "", b: "", type: null };
-
-function WagersTab({ wagers, saveWagers, day, saveDay }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState(EMPTY_DRAFT);
-  const [editCode, setEditCode] = useState(null);
-  const [editDraft, setEditDraft] = useState(null);
-
-  const active = wagers.filter((w) => !w.retired);
-  const retired = wagers.filter((w) => w.retired);
-
-  const add = () => {
-    const c = { ...draft, code: normCode(draft.code) };
-    if (!c.code || !c.name.trim() || !c.a.trim() || !c.b.trim()) return;
-    if (wagers.some((w) => w.code === c.code)) return;
-    haptic([20, 40]);
-    saveWagers([...wagers, { ...c, retired: false }]);
-    setDraft(EMPTY_DRAFT);
-    setAdding(false);
-  };
-
-  const saveEdit = () => {
-    if (!editDraft || !editDraft.name.trim() || !editDraft.a.trim() || !editDraft.b.trim()) return;
-    saveWagers(wagers.map((w) => (w.code === editCode ? { ...w, ...editDraft } : w)));
-    setEditCode(null); setEditDraft(null);
-  };
-
-  const retire = (code) => {
-    saveWagers(wagers.map((w) => (w.code === code ? { ...w, retired: true } : w)));
-    if (day && day.wagers[code]) {
-      const nw = { ...day.wagers }; delete nw[code];
-      saveDay({ ...day, wagers: nw });
-    }
-    setEditCode(null); setEditDraft(null);
-  };
-
-  const restore = (code) => {
-    saveWagers(wagers.map((w) => (w.code === code ? { ...w, retired: false } : w)));
-  };
-
-  return (
-    <div style={{ maxWidth: 640, margin: "0 auto", paddingTop: 24 }}>
-      <div style={{ display: "grid", gap: 8 }}>
-        {active.map((w) =>
-          editCode === w.code ? (
-            <div key={w.code} style={{ ...S.card, marginBottom: 0, borderLeft: "3px solid " + C.gold }}>
-              <WagerForm draft={editDraft} onChange={setEditDraft} onSubmit={saveEdit}
-                onCancel={() => { setEditCode(null); setEditDraft(null); }}
-                onRetire={() => retire(w.code)} lockCode submitLabel="Save" />
-            </div>
-          ) : (
-            <div key={w.code} style={{ ...S.card, marginBottom: 0, padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-                <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 16, flexShrink: 0 }}>{w.code}</span>
-                <span style={{ ...S.muted, ...S.wrap, flex: 1 }}>{w.name}</span>
-                {w.type && <span style={{ ...S.modeTag, color: C.inkL, opacity: 0.7 }}>{w.type}</span>}
-                <button onClick={() => { setEditCode(w.code); setEditDraft({ name: w.name, a: w.a, b: w.b, type: w.type || null, code: w.code }); setAdding(false); }}
-                  style={{ background: "none", border: "none", color: C.inkL, cursor: "pointer", fontSize: 13, opacity: 0.6, minWidth: 32, minHeight: 32 }}>
-                  ✎
-                </button>
-              </div>
-              <div style={{ fontSize: 13, marginTop: 6, display: "flex", alignItems: "baseline", minWidth: 0, gap: 8 }}>
-                <span style={{ ...S.wrap, borderLeft: "3px solid " + C.sideA, paddingLeft: 8 }}>{w.a}</span>
-                <span style={{ color: C.border, flexShrink: 0 }}>·</span>
-                <span style={{ ...S.wrap, borderLeft: "3px solid " + C.sideB, paddingLeft: 8 }}>{w.b}</span>
-              </div>
-            </div>
-          )
-        )}
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        {adding ? (
-          <div style={{ ...S.card, borderLeft: "3px solid " + C.gold }}>
-            <WagerForm draft={draft} onChange={setDraft} onSubmit={add} onCancel={() => setAdding(false)} />
-            <p style={{ ...S.muted, fontSize: 12, marginTop: 10 }}>A new wager enters at the next flip.</p>
-          </div>
-        ) : (
-          <button onClick={() => { setAdding(true); setEditCode(null); }} style={{ ...S.ghostBtn, width: "100%", minHeight: 44 }}>
-            {active.length ? "Add a wager" : "Place the first wager"}
-          </button>
-        )}
-      </div>
-
-      {retired.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <p style={{ ...S.label, marginBottom: 8 }}>Retired</p>
-          <div style={{ display: "grid", gap: 6 }}>
-            {retired.map((w) => (
-              <div key={w.code} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 6, background: C.ink + "06", minWidth: 0 }}>
-                <span style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 14, color: C.inkL, flexShrink: 0 }}>{w.code}</span>
-                <span style={{ ...S.muted, ...S.wrap, fontSize: 12, flex: 1 }}>{w.name}</span>
-                <button onClick={() => restore(w.code)} style={{ background: "none", border: "none", color: C.inkL, fontSize: 12, cursor: "pointer", fontFamily: FONT.sans }}>
-                  Restore
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      <div style={{ height: 32 }} />
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════
-   LEDGER
-   ═══════════════════════════════════════════════════ */
-
-function Band({ pHat, piHat }) {
-  const pct = (v) => (v * 100).toFixed(2) + "%";
-  const theory = pHat == null ? null : piTheory(pHat);
-  return (
-    <div style={{ padding: "14px 4px 4px" }}>
-      <div style={{ position: "relative", height: 26 }}>
-        <div style={{ position: "absolute", top: 11, left: 0, right: 0, height: 4, background: C.borderL, borderRadius: 2 }} />
-        <div style={{ position: "absolute", top: 11, left: pct(PI_MIN), width: pct(PI_MAX - PI_MIN), height: 4, background: C.gold + "40", borderRadius: 2 }} />
-        {[PI_MIN, 0.5, PI_MAX].map((v, i) => (
-          <div key={i} style={{ position: "absolute", top: 8, left: pct(v), width: 1, height: 10, background: C.inkL, opacity: 0.5 }} />
-        ))}
-        {theory != null && (
-          <div title="π(p̂) = (2+3p̂)/7" style={{
-            position: "absolute", top: 6, left: `calc(${pct(theory)} - 7px)`,
-            width: 12, height: 12, borderRadius: "50%", border: "2px solid " + C.ink, background: C.paper,
-          }} />
-        )}
-        {piHat != null && (
-          <div title="π̂ — ledger rate to A" style={{
-            position: "absolute", top: 8, left: `calc(${pct(piHat)} - 4px)`,
-            width: 9, height: 9, borderRadius: "50%", background: C.ink,
-          }} />
-        )}
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.inkL }}>
-        <span style={{ color: C.sideB, fontWeight: 700 }}>B</span>
-        <span style={{ position: "relative", left: "-6%" }}>2/7</span>
-        <span>1/2</span>
-        <span style={{ position: "relative", right: "-4%" }}>5/7</span>
-        <span style={{ color: C.sideA, fontWeight: 700 }}>A</span>
-      </div>
-    </div>
-  );
-}
-
-function LedgerTab({ wagers, ledger }) {
-  const [expanded, setExpanded] = useState(false);
-  const [sel, setSel] = useState(null);
-
-  const cols = useMemo(() => {
-    const codesInLedger = new Set();
-    ledger.forEach((d) => Object.keys(d.entries).forEach((c) => codesInLedger.add(c)));
-    const act = wagers.filter((w) => !w.retired);
-    const ret = wagers.filter((w) => w.retired && codesInLedger.has(w.code));
-    return [...act, ...ret];
-  }, [wagers, ledger]);
-
-  const doExport = () => {
-    const text = exportText(wagers, ledger);
-    const blob = new Blob([text], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "atdu-ledger.txt"; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  if (!ledger.length) {
-    return (
-      <div style={{ textAlign: "center", padding: "60px 20px" }}>
-        <p style={S.muted}>The ledger is empty. It fills at the first flip.</p>
-      </div>
-    );
-  }
-
-  const rows = (expanded ? ledger : ledger.slice(-10)).slice().reverse();
-  const selW = cols.find((w) => w.code === sel) || cols[0];
-  const st = selW ? stats(ledger, selW.code) : null;
-
-  return (
-    <div style={{ maxWidth: 640, margin: "0 auto", paddingTop: 24 }}>
-      <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr>
-                <th style={{ padding: "10px 10px 6px", borderBottom: "2px solid " + C.ink, textAlign: "left", fontWeight: 700, fontSize: 11, color: C.inkL }}>day</th>
-                {cols.map((w) => (
-                  <th key={w.code} title={w.name}
-                    style={{ padding: "10px 8px 6px", borderBottom: "2px solid " + C.ink, textAlign: "center", fontFamily: FONT.serif, fontWeight: 700, fontSize: 13, opacity: w.retired ? 0.45 : 1 }}>
-                    {w.code}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((d) => (
-                <tr key={d.day} style={{ borderBottom: "1px solid " + C.borderL }}>
-                  <td style={{ padding: "7px 10px", fontWeight: 600, fontSize: 12, color: C.inkL }}>
-                    {String(d.day).padStart(2, "0")}
-                  </td>
-                  {cols.map((w) => {
-                    const e = d.entries[w.code];
-                    if (!e) return <td key={w.code} />;
-                    if (e.null) return <td key={w.code} style={{ textAlign: "center", color: C.inkL, opacity: 0.5, fontSize: 12 }}>—</td>;
-                    return (
-                      <td key={w.code} style={{ textAlign: "center", padding: "7px 6px" }}
-                        title={`${sideText(w, e.side)} (${e.mode === "O" ? "open" : "constrained"})`}>
-                        <span style={{
-                          display: "inline-block", width: 13, height: 13, borderRadius: 3,
-                          background: sideColor(e.side), opacity: e.mode === "O" ? 1 : 0.45,
-                        }} />
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {ledger.length > 10 && (
-          <button onClick={() => setExpanded((p) => !p)}
-            style={{ display: "block", width: "100%", padding: 8, fontSize: 12, color: C.inkL, background: "none", border: "none", borderTop: "1px solid " + C.borderL, cursor: "pointer", fontFamily: FONT.sans, fontWeight: 600 }}>
-            {expanded ? "Recent" : `All ${ledger.length} days`}
-          </button>
-        )}
-        <div style={{ padding: "8px 14px 12px", display: "flex", gap: 14, justifyContent: "center", fontSize: 11, color: C.inkL, flexWrap: "wrap", borderTop: "1px solid " + C.borderL }}>
-          <span><i style={{ display: "inline-block", width: 8, height: 8, background: C.sideA, borderRadius: 2, marginRight: 4 }} />A</span>
-          <span><i style={{ display: "inline-block", width: 8, height: 8, background: C.sideB, borderRadius: 2, marginRight: 4 }} />B</span>
-          <span>solid = open · faded = constrained · — = null</span>
-        </div>
-      </div>
-
-      {selW && st && st.n > 0 && (
-        <div style={{ ...S.card }}>
-          {cols.length > 1 && (
-            <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-              {cols.map((w) => (
-                <button key={w.code} onClick={() => setSel(w.code)}
-                  style={{
-                    ...S.ghostBtn, padding: "5px 12px", fontSize: 12, minHeight: 32,
-                    background: selW.code === w.code ? C.ink : "transparent",
-                    color: selW.code === w.code ? C.paper : C.inkL,
-                    borderColor: selW.code === w.code ? C.ink : C.border,
-                  }}>
-                  {w.code}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: 18, fontSize: 12, color: C.inkL, flexWrap: "wrap" }}>
-            <span>steps <strong style={{ color: C.ink, fontSize: 15 }}>{st.n}</strong></span>
-            <span>open <strong style={{ color: C.ink, fontSize: 15 }}>{st.nO}</strong></span>
-            <span>constrained <strong style={{ color: C.ink, fontSize: 15 }}>{st.nC}</strong></span>
-            <span>null <strong style={{ color: C.ink, fontSize: 15 }}>{st.nNull}</strong></span>
-            {st.pHat != null && (() => { const r = sideRate(st.pHat); return (
-              <span title="open-resolution rate">p̂ <strong style={{ color: C.ink, fontSize: 15 }}>{r.pct}% <span style={{ color: sideColor(r.side) }}>{r.side}</span></strong></span>
-            ); })()}
-            {st.piHat != null && (() => { const r = sideRate(st.piHat); return (
-              <span title="ledger rate">π̂ <strong style={{ color: C.ink, fontSize: 15 }}>{r.pct}% <span style={{ color: sideColor(r.side) }}>{r.side}</span></strong></span>
-            ); })()}
-          </div>
-
-          <Band pHat={st.pHat} piHat={st.piHat} />
-
-          {st.series.length > 2 && (
-            <ResponsiveContainer width="100%" height={170}>
-              <LineChart data={st.series} margin={{ top: 8, right: 8, bottom: 0, left: -14 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.borderL} />
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: C.inkL }} />
-                <YAxis domain={[0, 1]} ticks={[PI_MIN, 0.5, PI_MAX]} tick={{ fontSize: 10, fill: C.inkL }}
-                  tickFormatter={(v) => (Math.abs(v - 0.5) < 0.01 ? "1/2" : Math.abs(v - PI_MIN) < 0.01 ? "2/7" : "5/7")} />
-                <ReferenceLine y={PI_MIN} stroke={C.inkL} strokeDasharray="4 4" strokeWidth={1} />
-                <ReferenceLine y={0.5} stroke={C.gold} strokeDasharray="4 4" strokeWidth={1.5} />
-                <ReferenceLine y={PI_MAX} stroke={C.inkL} strokeDasharray="4 4" strokeWidth={1} />
-                <Tooltip contentStyle={{ fontSize: 11, fontFamily: FONT.sans }}
-                  formatter={(v) => (v * 100).toFixed(1) + "%"} labelFormatter={(l) => "day " + l} />
-                <Line type="monotone" dataKey="pi" stroke={C.ink} strokeWidth={1.5} dot={false} name="π̂" />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      )}
-
-      <div style={{ textAlign: "center", marginBottom: 8 }}>
-        <button onClick={doExport} style={S.ghostBtn}>Export ledger</button>
-      </div>
-      <div style={{ height: 32 }} />
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════
-   SYSTEM
-   ═══════════════════════════════════════════════════ */
-
-const SIM_PS = [0, 0.25, 0.5, 0.75, 1];
-const SIM_COLORS = ["#7A5A45", "#9A7A60", "#8A8565", "#5A8A72", "#4A7585"];
-
-function SystemTab({ onReset }) {
-  const [runId, setRunId] = useState(0);
-
-  const sim = useMemo(() => {
-    if (!runId) return null;
-    return SIM_PS.map((p) => ({ p, series: simulate(p, 365) }));
-  }, [runId]);
-
-  const chart = useMemo(() => {
-    if (!sim) return null;
-    return Array.from({ length: 365 }, (_, i) => {
-      const pt = { t: i + 1 };
-      sim.forEach((s) => { pt["p" + s.p] = s.series[i].pi; });
-      return pt;
-    });
-  }, [sim]);
-
-  const rules = [
-    "A wager is two sides of one situation — mutually exclusive, sharing a boundary, one differentiator.",
-    "Each day, Flip One: Open or Constrained. Environmental uncertainty, fair.",
-    "Open — you resolve the side.",
-    "Constrained — Flip Two: heads inverts Last, tails inverts Last Constrained. The coin resolves.",
-    "The first constrained resolves open and is recorded as constrained, so memory has a value to invert.",
-    "Null — a side unavailable, or the wager not live: no step, no memory update, no weight.",
-    "The day must be fully reconciled — every wager a side or null — before the next flip.",
-    "The ledger records mode and side. It is append-only.",
-  ];
-
-  return (
-    <div style={{ maxWidth: 640, margin: "0 auto", paddingTop: 24 }}>
-      <div style={S.card}>
-        <h3 style={S.h3}>The rule</h3>
-        <div style={{ display: "grid", gap: 8 }}>
-          {rules.map((r, i) => (
-            <p key={i} style={{ fontSize: 14, lineHeight: 1.6, margin: 0 }}>{r}</p>
-          ))}
-        </div>
-        <p style={{ fontFamily: FONT.serif, fontSize: 16, marginTop: 14, textAlign: "center" }}>
-          π = (2 + 3p) / 7&nbsp;&nbsp;·&nbsp;&nbsp;2/7 ≤ π ≤ 5/7
-        </p>
-      </div>
-
-      <div style={S.card}>
-        <h3 style={S.h3}>Simulation</h3>
-        <p style={{ ...S.muted, marginBottom: 14 }}>
-          The rule is deterministic. The coin is uniform. The open-resolution lean is swept from all B to all A.
-          One year each.
-        </p>
-        <div style={{ textAlign: "center", marginBottom: sim ? 16 : 0 }}>
-          <button onClick={() => setRunId((s) => s + 1)}
-            style={{ ...S.btn, background: C.ink, color: C.paper, fontSize: 14, padding: "12px 36px" }}>
-            {sim ? "Run again" : "Run"}
-          </button>
-        </div>
-
-        {sim && chart && (
+        {!draft.exact && draft.type === "BIFURCATION" ? (
           <>
-            <ResponsiveContainer width="100%" height={230}>
-              <LineChart data={chart} margin={{ top: 8, right: 8, bottom: 0, left: -14 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.borderL} />
-                <XAxis dataKey="t" tick={{ fontSize: 10, fill: C.inkL }} />
-                <YAxis domain={[0, 1]} ticks={[PI_MIN, 0.5, PI_MAX]} tick={{ fontSize: 10, fill: C.inkL }}
-                  tickFormatter={(v) => (Math.abs(v - 0.5) < 0.01 ? "1/2" : Math.abs(v - PI_MIN) < 0.01 ? "2/7" : "5/7")} />
-                {SIM_PS.map((p, i) => (
-                  <ReferenceLine key={"th" + p} y={piTheory(p)} stroke={SIM_COLORS[i]} strokeDasharray="2 4" strokeWidth={1} />
-                ))}
-                <Tooltip contentStyle={{ fontSize: 11, fontFamily: FONT.sans }}
-                  formatter={(v) => (v * 100).toFixed(1) + "%"} labelFormatter={(l) => "step " + l} />
-                {SIM_PS.map((p, i) => (
-                  <Line key={"p" + p} type="monotone" dataKey={"p" + p} stroke={SIM_COLORS[i]}
-                    strokeWidth={1.8} dot={false} name={"p=" + p} />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-            <table style={{ width: "100%", marginTop: 10, fontSize: 12, borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ color: C.inkL }}>
-                  <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600 }}>open lean</th>
-                  <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>ledger π̂ (365)</th>
-                  <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600 }}>theory</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sim.map((s, i) => (
-                  <tr key={s.p} style={{ borderTop: "1px solid " + C.borderL }}>
-                    <td style={{ padding: "5px 6px", color: SIM_COLORS[i], fontWeight: 700 }}>
-                      {s.p === 0.5 ? "50 / 50" : fmtSide(s.p, 0)}
-                    </td>
-                    <td style={{ padding: "5px 6px", textAlign: "right" }}>{fmtSide(s.series[364].pi, 1)}</td>
-                    <td style={{ padding: "5px 6px", textAlign: "right", color: C.inkL }}>{fmtSide(piTheory(s.p), 1)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Field label="Consequence" hint="What remains indistinguishable between the two routes.">
+              <input
+                value={draft.consequence}
+                onChange={(event) => set("consequence", event.target.value)}
+                placeholder="Obtain an adequate low-friction lunch"
+              />
+            </Field>
+            <div className="builder__two-fields">
+              <Field label="Route A">
+                <input
+                  value={draft.routeA}
+                  onChange={(event) => set("routeA", event.target.value)}
+                  placeholder="Maple Pizza"
+                />
+              </Field>
+              <Field label="Route B">
+                <input
+                  value={draft.routeB}
+                  onChange={(event) => set("routeB", event.target.value)}
+                  placeholder="prepared fallback"
+                />
+              </Field>
+            </div>
+          </>
+        ) : null}
+
+        {!draft.exact && draft.type === "ASYMPTOTE" ? (
+          <>
+            <Field label="Measure" hint="The act or quantity measured on the shared axis.">
+              <input
+                value={draft.measure}
+                onChange={(event) => set("measure", event.target.value)}
+                placeholder="Use nicotine"
+              />
+            </Field>
+            <div className="builder__boundary-fields">
+              <Field label="Boundary">
+                <input
+                  value={draft.boundary}
+                  onChange={(event) => set("boundary", event.target.value)}
+                  placeholder="6"
+                  inputMode="decimal"
+                />
+              </Field>
+              <Field label="Unit">
+                <input
+                  value={draft.unit}
+                  onChange={(event) => set("unit", event.target.value)}
+                  placeholder="units"
+                />
+              </Field>
+            </div>
+          </>
+        ) : null}
+
+        {!draft.exact && draft.type === "PRECEDENCE" ? (
+          <>
+            <Field label="Act">
+              <input
+                value={draft.act}
+                onChange={(event) => set("act", event.target.value)}
+                placeholder="Make the payment"
+              />
+            </Field>
+            <Field label="Anchor" hint="The shared point around which temporal direction differs.">
+              <input
+                value={draft.anchor}
+                onChange={(event) => set("anchor", event.target.value)}
+                placeholder="payday"
+              />
+            </Field>
+          </>
+        ) : null}
+
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => {
+            const nextSides = generatedSides(draft);
+            setDraft((current) => ({
+              ...current,
+              exact: !current.exact,
+              exactA: current.exactA || nextSides.a,
+              exactB: current.exactB || nextSides.b,
+            }));
+          }}
+        >
+          {draft.exact ? "Use structured wording" : "Use exact wording"}
+        </button>
+      </div>
+
+      <div className="builder__preview">
+        <span className="eyebrow">Wager object</span>
+        <div className="wager-ticket">
+          <div className="wager-ticket__head">
+            <strong>{preview.code}</strong>
+            <span>{preview.name}</span>
+            <small>{STRUCTURES.find((item) => item.key === preview.type)?.label}</small>
+          </div>
+          <WagerGeometry wager={preview} />
+        </div>
+      </div>
+
+      {duplicate ? <p className="form-error">That code is already in use.</p> : null}
+
+      <div className="builder__actions">
+        {onCancel ? (
+          <button type="button" className="button button--quiet" onClick={onCancel}>
+            Cancel
+          </button>
+        ) : null}
+        <button type="submit" className="button button--primary" disabled={!valid}>
+          {initial ? "Revise Wager" : "Place Wager"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function WagerTicket({ wager, onEdit, onRetire, onRestore }) {
+  return (
+    <article className={`wager-ticket ${wager.retired ? "is-retired" : ""}`}>
+      <div className="wager-ticket__head">
+        <strong>{wager.code}</strong>
+        <span>{wager.name}</span>
+        <small>{STRUCTURES.find((item) => item.key === wager.type)?.label || wager.type}</small>
+      </div>
+      <WagerGeometry wager={wager} compact />
+      <div className="wager-ticket__actions">
+        {wager.retired ? (
+          <button className="text-button" onClick={onRestore}>Restore</button>
+        ) : (
+          <>
+            <button className="text-button" onClick={onEdit}>Revise</button>
+            <button className="text-button" onClick={onRetire}>Retire</button>
           </>
         )}
       </div>
+    </article>
+  );
+}
 
-      <div style={{ ...S.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={S.muted}>Erase all wagers and the ledger.</span>
-        <button onClick={onReset} style={{ ...S.ghostBtn, color: C.red, borderColor: C.red + "40" }}>Reset</button>
+function WagerSurface({ wagers, saveWagers, day, saveDay }) {
+  const [builder, setBuilder] = useState(null);
+  const active = wagers.filter((wager) => !wager.retired);
+  const retired = wagers.filter((wager) => wager.retired);
+
+  function place(wager) {
+    if (builder?.code) {
+      saveWagers(
+        wagers.map((current) =>
+          current.code === builder.code ? { ...current, ...wager } : current,
+        ),
+      );
+    } else {
+      saveWagers([...wagers, wager]);
+    }
+    setBuilder(null);
+  }
+
+  function retire(code) {
+    saveWagers(
+      wagers.map((wager) =>
+        wager.code === code ? { ...wager, retired: true } : wager,
+      ),
+    );
+    if (day?.wagers?.[code]) {
+      const nextWagers = { ...day.wagers };
+      delete nextWagers[code];
+      saveDay({ ...day, wagers: nextWagers });
+    }
+  }
+
+  function restore(code) {
+    saveWagers(
+      wagers.map((wager) =>
+        wager.code === code ? { ...wager, retired: false } : wager,
+      ),
+    );
+  }
+
+  if (builder) {
+    const existing = builder.code
+      ? wagers.find((wager) => wager.code === builder.code)
+      : null;
+    return (
+      <section className="surface surface--wager">
+        <WagerBuilder
+          initial={existing ? draftFromWager(existing) : null}
+          existingCodes={wagers.map((wager) => wager.code)}
+          title={existing ? "Revise Wager" : "Place Wager"}
+          onPlace={place}
+          onCancel={() => setBuilder(null)}
+        />
+      </section>
+    );
+  }
+
+  return (
+    <section className="surface surface--wager">
+      <div className="surface-heading">
+        <div>
+          <span className="eyebrow">Wager</span>
+          <h1>Placed Wagers</h1>
+        </div>
+        <button className="button button--primary" onClick={() => setBuilder({})}>
+          Place Wager
+        </button>
       </div>
-      <div style={{ height: 32 }} />
+
+      {active.length ? (
+        <div className="wager-list">
+          {active.map((wager) => (
+            <WagerTicket
+              key={wager.code}
+              wager={wager}
+              onEdit={() => setBuilder({ code: wager.code })}
+              onRetire={() => retire(wager.code)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <div className="empty-state__symbol">◇</div>
+          <h2>No active Wagers</h2>
+          <p>A Wager defines the field of the Flip.</p>
+          <button className="button button--primary" onClick={() => setBuilder({})}>
+            Place first Wager
+          </button>
+        </div>
+      )}
+
+      {retired.length ? (
+        <details className="retired-list">
+          <summary>Retired · {retired.length}</summary>
+          <div className="wager-list wager-list--retired">
+            {retired.map((wager) => (
+              <WagerTicket
+                key={wager.code}
+                wager={wager}
+                onRestore={() => restore(wager.code)}
+              />
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function Reel({ label, value, spinning, tone = "neutral" }) {
+  return (
+    <div className={`reel reel--${tone} ${spinning ? "is-spinning" : ""}`}>
+      <span className="reel__label">{label}</span>
+      <div className="reel__window">
+        <div className="reel__value">{value}</div>
+      </div>
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════
-   APP
-   ═══════════════════════════════════════════════════ */
+function FlipEvent({ dayNumber, closingDay, wagers, results, onFinished }) {
+  const [index, setIndex] = useState(-1);
+  const [phase, setPhase] = useState(closingDay ? "record" : "day");
+  const timers = useRef([]);
+  const reducedMotion = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
 
-const TABS = [
-  { id: "today", label: "Today" },
-  { id: "wagers", label: "Wagers" },
-  { id: "ledger", label: "Ledger" },
-  { id: "system", label: "System" },
+  const current = index >= 0 ? results[index] : null;
+  const wager = current
+    ? wagers.find((candidate) => candidate.code === current.code)
+    : null;
+
+  const delay = useCallback(
+    (callback, milliseconds) => {
+      const timer = window.setTimeout(callback, reducedMotion ? 30 : milliseconds);
+      timers.current.push(timer);
+    },
+    [reducedMotion],
+  );
+
+  const clearTimers = useCallback(() => {
+    timers.current.forEach((timer) => window.clearTimeout(timer));
+    timers.current = [];
+  }, []);
+
+  const advanceWager = useCallback(() => {
+    if (index + 1 < results.length) {
+      setIndex((value) => value + 1);
+      setPhase("load");
+    } else {
+      setPhase("settle");
+    }
+  }, [index, results.length]);
+
+  useEffect(() => {
+    clearTimers();
+
+    if (phase === "record") {
+      haptic(18);
+      delay(() => setPhase("day"), 650);
+    } else if (phase === "day") {
+      delay(() => {
+        if (results.length) {
+          setIndex(0);
+          setPhase("load");
+        } else {
+          setPhase("settle");
+        }
+      }, 600);
+    } else if (phase === "load") {
+      haptic(8);
+      delay(() => setPhase("gate-spin"), 520);
+    } else if (phase === "gate-spin") {
+      haptic([12, 20, 12]);
+      delay(() => setPhase("gate-land"), 1050);
+    } else if (phase === "gate-land") {
+      delay(() => {
+        if (current?.mode === "O") {
+          setPhase("open");
+        } else if (current?.seed) {
+          setPhase("seed");
+        } else {
+          setPhase("reference-spin");
+        }
+      }, 680);
+    } else if (phase === "open" || phase === "seed") {
+      haptic(current?.mode === "O" ? 16 : [18, 32]);
+      delay(advanceWager, 1050);
+    } else if (phase === "reference-spin") {
+      haptic([14, 24, 14]);
+      delay(() => setPhase("reference-land"), 900);
+    } else if (phase === "reference-land") {
+      delay(() => setPhase("invert"), 650);
+    } else if (phase === "invert") {
+      haptic([16, 24, 24]);
+      delay(() => setPhase("resolved"), 760);
+    } else if (phase === "resolved") {
+      haptic(22);
+      delay(advanceWager, 900);
+    } else if (phase === "settle") {
+      haptic(18);
+      delay(onFinished, 1050);
+    }
+
+    return clearTimers;
+  }, [
+    advanceWager,
+    clearTimers,
+    current?.mode,
+    current?.seed,
+    delay,
+    onFinished,
+    phase,
+    results.length,
+  ]);
+
+  const gateValue = phase === "gate-spin" ? "OPEN · CONSTRAINED" : current?.mode === "O" ? "OPEN" : "CONSTRAINED";
+  const referenceValue = current?.reference === "L" ? "LAST" : "LAST CONSTRAINED";
+  const referenceSide = current?.referenceSide || (current?.side === "A" ? "B" : "A");
+
+  return (
+    <div className="flip-event" role="dialog" aria-modal="true" aria-label={`Flip Day ${dayNumber}`}>
+      <div className="machine-shell">
+        <div className="machine-shell__brand">
+          <span>ATDU</span>
+          <small>Wager · Coin · Ledger</small>
+        </div>
+
+        {phase === "record" ? (
+          <div className="event-stage event-stage--record">
+            <span className="eyebrow">Ledger</span>
+            <h2>Record Day {closingDay?.day}</h2>
+            <div className="ledger-tape ledger-tape--event">
+              <strong>{String(closingDay?.day || "").padStart(3, "0")}</strong>
+              {Object.entries(closingDay?.entries || {}).map(([code, entry]) => (
+                <span key={code}>{code} {resolutionCode(entry)}</span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {phase === "day" ? (
+          <div className="event-stage event-stage--day">
+            <span className="eyebrow">Coin</span>
+            <h2>Day {dayNumber}</h2>
+            <p>{results.length} Wager{results.length === 1 ? "" : "s"} loaded</p>
+          </div>
+        ) : null}
+
+        {current && wager && !["record", "day", "settle"].includes(phase) ? (
+          <div className="event-stage event-stage--machine">
+            <div className="loaded-wager">
+              <span>{wager.code}</span>
+              <strong>{wager.name}</strong>
+              <small>{index + 1} / {results.length}</small>
+            </div>
+
+            <WagerGeometry
+              wager={wager}
+              compact
+              activeSide={["resolved", "invert"].includes(phase) ? current.side : null}
+            />
+
+            <div className="reel-bank">
+              <Reel
+                label="Gate"
+                value={gateValue}
+                spinning={phase === "gate-spin"}
+                tone={current.mode === "O" ? "open" : "constrained"}
+              />
+
+              {["reference-spin", "reference-land", "invert", "resolved"].includes(phase) ? (
+                <Reel
+                  label="Reference"
+                  value={phase === "reference-spin" ? "LAST · LAST CONSTRAINED" : referenceValue}
+                  spinning={phase === "reference-spin"}
+                />
+              ) : null}
+            </div>
+
+            {phase === "open" ? (
+              <div className="event-result event-result--open">
+                <span>OPEN</span>
+                <strong>A ↔ B</strong>
+                <small>Unresolved</small>
+              </div>
+            ) : null}
+
+            {phase === "seed" ? (
+              <div className="event-result">
+                <span>CONSTRAINED</span>
+                <strong>No Reference</strong>
+                <small>Resolve today</small>
+              </div>
+            ) : null}
+
+            {phase === "reference-land" ? (
+              <div className="memory-token">
+                <span>{referenceValue}</span>
+                <strong>{referenceSide}</strong>
+              </div>
+            ) : null}
+
+            {phase === "invert" ? (
+              <div className="inversion">
+                <span>{referenceSide}</span>
+                <i>→</i>
+                <strong>{current.side}</strong>
+              </div>
+            ) : null}
+
+            {phase === "resolved" ? (
+              <div className="event-result event-result--resolved">
+                <span>Resolved</span>
+                <strong>{current.mode}{current.side}</strong>
+                <small>{sideText(wager, current.side)}</small>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {phase === "settle" ? (
+          <div className="event-stage event-stage--settle">
+            <span className="eyebrow">Coin</span>
+            <h2>Day {dayNumber}</h2>
+            <div className="resolution-register">
+              {results.map((result) => (
+                <span key={result.code}>
+                  <small>{result.code}</small>
+                  <strong>{result.mode}{result.side || "·"}</strong>
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <button className="event-skip" onClick={onFinished}>Enter Day {dayNumber}</button>
+    </div>
+  );
+}
+
+function DayWager({ wager, state, onSide, onNull, onRestore }) {
+  if (state.nulled) {
+    return (
+      <article className="day-wager day-wager--null">
+        <div className="day-wager__head">
+          <strong>{wager.code}</strong>
+          <span>{wager.name}</span>
+          <em>Null</em>
+        </div>
+        <div className="null-object">
+          <strong>∅</strong>
+          <span>Null</span>
+        </div>
+        <button className="text-button" onClick={onRestore}>Restore Wager</button>
+      </article>
+    );
+  }
+
+  const openLike = state.mode === "O" || state.seed;
+  const code = state.side ? `${state.mode}${state.side}` : null;
+
+  return (
+    <article className="day-wager">
+      <div className="day-wager__head">
+        <strong>{wager.code}</strong>
+        <span>{wager.name}</span>
+        <em>{state.mode === "O" ? "Open" : state.seed ? "Constrained · no reference" : "Constrained"}</em>
+      </div>
+
+      <WagerGeometry wager={wager} compact activeSide={state.side} />
+
+      {openLike ? (
+        <div className="resolution-controls">
+          <button
+            className={`side-control side-control--a ${state.side === "A" ? "is-selected" : ""}`}
+            onClick={() => onSide("A")}
+          >
+            <span>{state.mode}A</span>
+            <strong>{wager.a}</strong>
+          </button>
+          <button
+            className={`side-control side-control--b ${state.side === "B" ? "is-selected" : ""}`}
+            onClick={() => onSide("B")}
+          >
+            <span>{state.mode}B</span>
+            <strong>{wager.b}</strong>
+          </button>
+        </div>
+      ) : (
+        <div className="locked-resolution">
+          <span>{code}</span>
+          <strong>{sideText(wager, state.side)}</strong>
+        </div>
+      )}
+
+      <button className="text-button day-wager__null" onClick={onNull}>
+        Wager unavailable
+      </button>
+    </article>
+  );
+}
+
+function CoinSurface({ wagers, ledger, day, saveDay, saveLedger, goWager }) {
+  const [event, setEvent] = useState(null);
+  const active = wagers.filter((wager) => !wager.retired);
+  const currentWagers = day
+    ? active.filter((wager) => day.wagers[wager.code])
+    : [];
+  const pending = day
+    ? active.filter((wager) => !day.wagers[wager.code])
+    : active;
+  const remaining = unresolvedCount(day);
+  const canFlip = active.length > 0 && (!day || reconciled(day));
+
+  function setSide(code, side) {
+    haptic(10);
+    const current = day.wagers[code];
+    saveDay({
+      ...day,
+      wagers: {
+        ...day.wagers,
+        [code]: { ...current, side, nulled: false },
+      },
+    });
+  }
+
+  function setNull(code, nulled) {
+    haptic(8);
+    const current = day.wagers[code];
+    saveDay({
+      ...day,
+      wagers: {
+        ...day.wagers,
+        [code]: {
+          ...current,
+          nulled,
+          side: nulled && (current.mode === "O" || current.seed) ? null : current.side,
+        },
+      },
+    });
+  }
+
+  function flip() {
+    if (!canFlip) return;
+    haptic([28, 24, 28]);
+    const closingDay = day
+      ? {
+          day: day.day,
+          date: day.date,
+          entries: Object.fromEntries(
+            Object.entries(day.wagers).map(([code, state]) => [
+              code,
+              state.nulled
+                ? { null: true }
+                : { mode: state.mode, side: state.side },
+            ]),
+          ),
+        }
+      : null;
+    const nextLedger = day ? commitDay(day, ledger) : ledger;
+    const flipped = flipDay(active.map((wager) => wager.code), nextLedger);
+    const nextNumber = (day ? day.day : nextLedger.length) + 1;
+    const nextDay = { day: nextNumber, date: todayISO(), wagers: flipped };
+
+    saveLedger(nextLedger);
+    saveDay(nextDay);
+    setEvent({
+      dayNumber: nextNumber,
+      closingDay,
+      results: active.map((wager) => ({ code: wager.code, ...flipped[wager.code] })),
+    });
+  }
+
+  if (!active.length) {
+    return (
+      <section className="surface surface--coin">
+        <div className="coin-empty">
+          <div className="machine-miniature" aria-hidden="true">
+            <i /><i /><i />
+          </div>
+          <span className="eyebrow">Coin</span>
+          <h1>No active Wagers</h1>
+          <button className="button button--primary" onClick={goWager}>Wager</button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="surface surface--coin">
+      <div className="coin-cabinet">
+        <div className="coin-cabinet__marquee">
+          <span>ATDU</span>
+          <small>Deterministic uncertainty</small>
+        </div>
+
+        <div className="coin-cabinet__status">
+          <span className="eyebrow">Coin</span>
+          <h1>{day ? `Day ${day.day}` : "No day recorded"}</h1>
+          {day ? (
+            remaining === 0 ? (
+              <strong>Reconciled</strong>
+            ) : (
+              <strong>{remaining} unresolved</strong>
+            )
+          ) : (
+            <strong>{active.length} Wager{active.length === 1 ? "" : "s"} loaded</strong>
+          )}
+        </div>
+
+        {day ? (
+          <div className="day-board">
+            {currentWagers.map((wager) => (
+              <DayWager
+                key={wager.code}
+                wager={wager}
+                state={day.wagers[wager.code]}
+                onSide={(side) => setSide(wager.code, side)}
+                onNull={() => setNull(wager.code, true)}
+                onRestore={() => setNull(wager.code, false)}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        {pending.length && day ? (
+          <div className="pending-strip">
+            <span>Next Flip</span>
+            <strong>{pending.map((wager) => wager.code).join(" · ")}</strong>
+          </div>
+        ) : null}
+
+        <div className="flip-control">
+          <button
+            type="button"
+            className="flip-button"
+            disabled={!canFlip}
+            onClick={flip}
+            aria-label={`Flip Day ${(day ? day.day : ledger.length) + 1}`}
+          >
+            <span className="flip-button__cap">●</span>
+            <span className="flip-button__label">Flip</span>
+          </button>
+          <small>
+            {canFlip
+              ? `Day ${(day ? day.day : ledger.length) + 1}`
+              : `Reconcile ${remaining} Wager${remaining === 1 ? "" : "s"}`}
+          </small>
+        </div>
+      </div>
+
+      {event ? (
+        <FlipEvent
+          dayNumber={event.dayNumber}
+          closingDay={event.closingDay}
+          wagers={wagers}
+          results={event.results}
+          onFinished={() => setEvent(null)}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function LedgerSurface({ wagers, ledger }) {
+  const [selected, setSelected] = useState(null);
+  const wagerColumns = useMemo(() => {
+    const inLedger = new Set();
+    ledger.forEach((day) => Object.keys(day.entries).forEach((code) => inLedger.add(code)));
+    return wagers.filter((wager) => !wager.retired || inLedger.has(wager.code));
+  }, [ledger, wagers]);
+
+  const selectedWager =
+    wagerColumns.find((wager) => wager.code === selected) || wagerColumns[0] || null;
+  const selectedMemory = selectedWager ? memory(ledger, selectedWager.code) : null;
+
+  function downloadLedger() {
+    const text = exportText(wagers, ledger);
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "atdu-ledger.txt";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <section className="surface surface--ledger">
+      <div className="surface-heading">
+        <div>
+          <span className="eyebrow">Ledger</span>
+          <h1>Persistent trace</h1>
+        </div>
+        {ledger.length ? (
+          <button className="button button--quiet" onClick={downloadLedger}>Export</button>
+        ) : null}
+      </div>
+
+      {!ledger.length ? (
+        <div className="empty-state">
+          <div className="empty-state__symbol">≡</div>
+          <h2>The Ledger is empty</h2>
+          <p>The first reconciled day enters at the next Flip.</p>
+        </div>
+      ) : (
+        <>
+          <div className="ledger-machine">
+            <div className="ledger-machine__slot">LEDGER</div>
+            <div className="ledger-scroll" tabIndex="0">
+              <table className="ledger-table">
+                <thead>
+                  <tr>
+                    <th>Day</th>
+                    {wagerColumns.map((wager) => (
+                      <th key={wager.code}>
+                        <button
+                          className={selectedWager?.code === wager.code ? "is-selected" : ""}
+                          onClick={() => setSelected(wager.code)}
+                          title={wager.name}
+                        >
+                          {wager.code}
+                        </button>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.map((record) => (
+                    <tr key={record.day}>
+                      <th>{String(record.day).padStart(3, "0")}</th>
+                      {wagerColumns.map((wager) => {
+                        const entry = record.entries[wager.code];
+                        const code = entry ? resolutionCode(entry) : "";
+                        return (
+                          <td key={wager.code}>
+                            {entry ? (
+                              <span
+                                className={`ledger-code ledger-code--${code === "∅" ? "null" : code.toLowerCase()}`}
+                                title={entry.null ? "Null" : `${sideText(wager, entry.side)} · ${entry.mode === "O" ? "Open" : "Constrained"}`}
+                              >
+                                {code}
+                              </span>
+                            ) : null}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {selectedWager && selectedMemory ? (
+            <div className="memory-panel">
+              <div>
+                <span className="eyebrow">Wager</span>
+                <h2>{selectedWager.code} · {selectedWager.name}</h2>
+              </div>
+              <div className="memory-pair">
+                <div>
+                  <span>Last</span>
+                  <strong>{selectedMemory.L || "—"}</strong>
+                </div>
+                <div>
+                  <span>Last Constrained</span>
+                  <strong>{selectedMemory.K || "—"}</strong>
+                </div>
+              </div>
+              <WagerGeometry wager={selectedWager} compact />
+            </div>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+function RuleDialog({ onClose, onReset }) {
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="rule-dialog" role="dialog" aria-modal="true" aria-labelledby="rule-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">ATDU</span>
+            <h2 id="rule-title">The rule</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <div className="rule-copy">
+          <p>A Wager is one Situation divided into two Sides through one differentiator. Both Sides must be available.</p>
+          <p>Flip once. Open: resolve either Side.</p>
+          <p>Constrained: the Coin selects Last or Last Constrained; invert the selected Side.</p>
+          <p>If either Side is unavailable, the Wager is Null.</p>
+          <p>Reconcile every Wager before the next Flip. Record the day in the Ledger.</p>
+        </div>
+        <div className="proof-strip">
+          <span>π = (2 + 3p) / 7</span>
+          <span>2/7 ≤ π ≤ 5/7</span>
+        </div>
+        <div className="rule-dialog__danger">
+          <button className="text-button" onClick={onReset}>Reset all data</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+const NAVIGATION = [
+  { id: "wager", label: "Wager", symbol: "◇" },
+  { id: "coin", label: "Coin", symbol: "●" },
+  { id: "ledger", label: "Ledger", symbol: "≡" },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState(null);
+  const [view, setView] = useState(null);
   const [wagers, setWagers] = useState([]);
   const [ledger, setLedger] = useState([]);
   const [day, setDay] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [showRule, setShowRule] = useState(false);
 
   useEffect(() => {
+    let active = true;
     (async () => {
       try {
-        if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-      } catch { /* no-op */ }
-      const w = parse(await sGet(SKEY.wagers), []) || [];
-      const l = parse(await sGet(SKEY.ledger), []) || [];
-      const d = parse(await sGet(SKEY.day), null);
-      setWagers(Array.isArray(w) ? w : []);
-      setLedger(Array.isArray(l) ? l : []);
-      setDay(d && d.day ? d : null);
-      setTab(Array.isArray(w) && w.some((x) => !x.retired) ? "today" : "wagers");
+        await navigator.storage?.persist?.();
+      } catch {
+        // Optional persistence request.
+      }
+      const storedWagers = parse(await storageGet(STORAGE_KEYS.wagers), []);
+      const storedLedger = parse(await storageGet(STORAGE_KEYS.ledger), []);
+      const storedDay = parse(await storageGet(STORAGE_KEYS.day), null);
+      if (!active) return;
+      const nextWagers = Array.isArray(storedWagers) ? storedWagers : [];
+      setWagers(nextWagers);
+      setLedger(Array.isArray(storedLedger) ? storedLedger : []);
+      setDay(storedDay?.day ? storedDay : null);
+      setView(nextWagers.some((wager) => !wager.retired) ? "coin" : "wager");
       setLoaded(true);
     })();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const saveWagers = useCallback((w) => { setWagers(w); sSet(SKEY.wagers, JSON.stringify(w)); }, []);
-  const saveLedger = useCallback((l) => { setLedger(l); sSet(SKEY.ledger, JSON.stringify(l)); }, []);
-  const saveDay = useCallback((d) => {
-    setDay(d);
-    if (d) sSet(SKEY.day, JSON.stringify(d)); else sDel(SKEY.day);
+  const saveWagers = useCallback((next) => {
+    setWagers(next);
+    storageSet(STORAGE_KEYS.wagers, JSON.stringify(next));
   }, []);
 
-  const reset = () => {
-    if (!window.confirm("Erase all wagers and the ledger? This cannot be undone.")) return;
-    saveWagers([]); saveLedger([]); saveDay(null);
-    setTab("wagers");
-  };
+  const saveLedger = useCallback((next) => {
+    setLedger(next);
+    storageSet(STORAGE_KEYS.ledger, JSON.stringify(next));
+  }, []);
 
-  if (!loaded) return null;
+  const saveDay = useCallback((next) => {
+    setDay(next);
+    if (next) storageSet(STORAGE_KEYS.day, JSON.stringify(next));
+    else storageDelete(STORAGE_KEYS.day);
+  }, []);
+
+  function reset() {
+    if (!window.confirm("Erase all Wagers, the current day, and the Ledger?")) return;
+    saveWagers([]);
+    saveLedger([]);
+    saveDay(null);
+    setShowRule(false);
+    setView("wager");
+  }
+
+  if (!loaded) return <div className="app-loading" aria-label="Loading" />;
 
   return (
-    <div style={{
-      fontFamily: FONT.sans, background: C.paper, color: C.ink, minHeight: "100vh",
-      maxWidth: 900, margin: "0 auto",
-      padding: "0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left))",
-    }}>
-      <style>{GLOBAL_CSS}</style>
-      <header style={{ textAlign: "center", padding: "32px 0 4px" }}>
-        <h1 style={{ fontFamily: FONT.serif, fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em" }}>ATDU</h1>
-        <p style={{ ...S.muted, marginTop: 4, fontSize: 12 }}>A wager. A coin. A ledger.</p>
+    <div className="app-shell">
+      <header className="app-header">
+        <button className="brand" onClick={() => setView("coin")} aria-label="ATDU Coin">
+          <strong>ATDU</strong>
+          <span>Wager · Coin · Ledger</span>
+        </button>
+        <button className="rule-button" onClick={() => setShowRule(true)}>Rule</button>
       </header>
-      <nav style={{ display: "flex", justifyContent: "center", gap: 2, margin: "18px 0 4px", borderBottom: "1px solid " + C.border }}>
-        {TABS.map((t) => (
-          <button key={t.id} onClick={() => { haptic(8); setTab(t.id); }}
-            aria-current={tab === t.id ? "page" : undefined}
-            style={{
-              ...S.btn, fontSize: 13, padding: "10px 18px", background: "transparent",
-              borderRadius: "6px 6px 0 0", minHeight: 40,
-              color: tab === t.id ? C.ink : C.inkL,
-              borderBottom: tab === t.id ? "2px solid " + C.ink : "2px solid transparent",
-              fontWeight: tab === t.id ? 700 : 400,
-            }}>
-            {t.label}
+
+      <main className="app-main">
+        {view === "wager" ? (
+          <WagerSurface wagers={wagers} saveWagers={saveWagers} day={day} saveDay={saveDay} />
+        ) : null}
+        {view === "coin" ? (
+          <CoinSurface
+            wagers={wagers}
+            ledger={ledger}
+            day={day}
+            saveDay={saveDay}
+            saveLedger={saveLedger}
+            goWager={() => setView("wager")}
+          />
+        ) : null}
+        {view === "ledger" ? <LedgerSurface wagers={wagers} ledger={ledger} /> : null}
+      </main>
+
+      <nav className="primary-nav" aria-label="Primary objects">
+        {NAVIGATION.map((item) => (
+          <button
+            key={item.id}
+            className={view === item.id ? "is-current" : ""}
+            onClick={() => {
+              haptic(6);
+              setView(item.id);
+            }}
+            aria-current={view === item.id ? "page" : undefined}
+          >
+            <span>{item.symbol}</span>
+            <strong>{item.label}</strong>
           </button>
         ))}
       </nav>
-      {tab === "today" && (
-        <TodayTab wagers={wagers} ledger={ledger} day={day}
-          saveDay={saveDay} saveLedger={saveLedger} goWagers={() => setTab("wagers")} />
-      )}
-      {tab === "wagers" && (
-        <WagersTab wagers={wagers} saveWagers={saveWagers} day={day} saveDay={saveDay} />
-      )}
-      {tab === "ledger" && <LedgerTab wagers={wagers} ledger={ledger} />}
-      {tab === "system" && <SystemTab onReset={reset} />}
+
+      {showRule ? <RuleDialog onClose={() => setShowRule(false)} onReset={reset} /> : null}
     </div>
   );
 }
