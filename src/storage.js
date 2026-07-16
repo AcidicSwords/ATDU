@@ -17,7 +17,8 @@ export const storage = {
   async get(key) {
     if (useLocalStorage) {
       try {
-        return { value: window.localStorage.getItem(key) };
+        const value = window.localStorage.getItem(key);
+        return { value: value ?? (memoryStore.has(key) ? memoryStore.get(key) : null) };
       } catch (error) {
         console.warn("storage.get fallback to memory store", error);
       }
@@ -29,6 +30,7 @@ export const storage = {
     if (useLocalStorage) {
       try {
         window.localStorage.setItem(key, normalized);
+        memoryStore.delete(key);
         return true;
       } catch (error) {
         console.warn("storage.set fallback to memory store", error);
@@ -41,6 +43,7 @@ export const storage = {
     if (useLocalStorage) {
       try {
         window.localStorage.removeItem(key);
+        memoryStore.delete(key);
         return true;
       } catch (error) {
         console.warn("storage.delete fallback to memory store", error);

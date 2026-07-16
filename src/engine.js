@@ -10,13 +10,15 @@
 // Day state (mutable until the flip commits it):
 //   { day, date, wagers: { [code]: { mode, side, seed, nulled,
 //     reference, referenceSide } } }
+// A Wager declared Null before the Flip has no mode, Side, or Coin toss:
+//   { nulled: true, predeclared: true }
 //
 // Rules implemented:
 //   Flip One  — environmental: Open or Constrained, fair.
 //   Flip Two  — constrained only: heads inverts Last, tails inverts
 //               Last Constrained.
-//   Seeding   — a constrained step whose reference does not exist resolves
-//               open and is recorded as constrained (initializes memory).
+//   Seeding   — the first constrained step resolves by authored Side, remains
+//               constrained, and initializes both memories without a Reference.
 //   Null      — either side unavailable, or the wager not live: no memory
 //               update, no weight. The current day must be fully reconciled
 //               (every live wager: a side or null) before the next flip.
@@ -28,27 +30,54 @@ const rnd = (() => {
   return Math.random;
 })();
 
-export const coin = () => rnd() < 0.5;
+export const coin = (random = rnd) => random() < 0.5;
 
-export const invert = (side) => (side === "A" ? "B" : "A");
+const isSide = (side) => side === "A" || side === "B";
+const isMode = (mode) => mode === "O" || mode === "C";
+
+function assertUniqueCodes(codes) {
+  if (!Array.isArray(codes) || codes.some((code) => typeof code !== "string" || !code)) {
+    throw new TypeError("Wager codes must be non-empty strings");
+  }
+  if (new Set(codes).size !== codes.length) throw new Error("Wager codes must be unique");
+}
+
+export function invert(side) {
+  if (side === "A") return "B";
+  if (side === "B") return "A";
+  throw new TypeError("A Side must be A or B");
+}
+
+export function applyEntry(mem, entry) {
+  if (!entry || entry.null === true) return { ...mem };
+  if ("null" in entry) throw new TypeError("Invalid Null entry");
+  if (!isMode(entry.mode) || !isSide(entry.side)) throw new TypeError("Invalid Ledger entry");
+  return {
+    L: entry.side,
+    K: entry.mode === "C" ? entry.side : mem.K,
+  };
+}
 
 // Memory references derived from the ledger — computed, never stored.
 export function memory(ledger, code) {
   let L = null; // Last: most recent resolved side
   let K = null; // Last Constrained: most recent constrained-resolved side
   for (const day of ledger) {
+    if (!day?.entries || typeof day.entries !== "object") throw new TypeError("Invalid Ledger Day");
     const entry = day.entries[code];
     if (!entry || entry.null) continue;
-    L = entry.side;
-    if (entry.mode === "C") K = entry.side;
+    ({ L, K } = applyEntry({ L, K }, entry));
   }
   return { L, K };
 }
 
 // One wager, one step. Reference metadata is presentation-only: it exposes
 // the exact derivation without changing the transition rule or Ledger.
-export function flipWager(mem) {
-  if (coin()) {
+export function flipWager(mem, toss = coin) {
+  if (!mem || (mem.L !== null && !isSide(mem.L)) || (mem.K !== null && !isSide(mem.K)) || (mem.K && !mem.L)) {
+    throw new TypeError("Invalid Wager memory");
+  }
+  if (toss()) {
     return {
       mode: "O",
       side: null,
@@ -58,18 +87,18 @@ export function flipWager(mem) {
     };
   }
 
-  const reference = coin() ? "L" : "K";
-  const referenceSide = mem[reference];
-
-  if (referenceSide == null) {
+  if (mem.K == null) {
     return {
       mode: "C",
       side: null,
       seed: true,
-      reference,
+      reference: null,
       referenceSide: null,
     };
   }
+
+  const reference = toss() ? "L" : "K";
+  const referenceSide = mem[reference];
 
   return {
     mode: "C",
@@ -81,10 +110,11 @@ export function flipWager(mem) {
 }
 
 // Flip a full day for the given wager codes.
-export function flipDay(codes, ledger) {
+export function flipDay(codes, ledger, toss = coin) {
+  assertUniqueCodes(codes);
   const wagers = {};
   for (const code of codes) {
-    const result = flipWager(memory(ledger, code));
+    const result = flipWager(memory(ledger, code), toss);
     wagers[code] = { ...result, nulled: false };
   }
   return wagers;
@@ -93,25 +123,77 @@ export function flipDay(codes, ledger) {
 // Reconciliation: every wager in the day carries a side or a null.
 export function reconciled(day) {
   if (!day) return true;
-  return Object.values(day.wagers).every((wager) => wager.nulled || wager.side);
+  if (!day.wagers || typeof day.wagers !== "object") return false;
+  return Object.values(day.wagers).every((wager) => wager?.nulled === true || isSide(wager?.side));
 }
 
 export function unresolvedCount(day) {
   if (!day) return 0;
+  if (!day.wagers || typeof day.wagers !== "object") return 0;
   return Object.values(day.wagers).filter(
-    (wager) => !wager.nulled && !wager.side,
+    (wager) => wager?.nulled !== true && !isSide(wager?.side),
   ).length;
 }
 
 // Commit the day to the ledger. Returns a new ledger; never mutates.
-export function commitDay(day, ledger) {
-  const entries = {};
-  for (const [code, wager] of Object.entries(day.wagers)) {
-    entries[code] = wager.nulled
-      ? { null: true }
-      : { mode: wager.mode, side: wager.side };
+export function entryFromWager(wager) {
+  if (wager?.nulled === true) return { null: true };
+  if (!isMode(wager?.mode) || !isSide(wager?.side)) {
+    throw new Error("Cannot record an unresolved Wager");
   }
-  return [...ledger, { day: day.day, date: day.date, entries }];
+  return { mode: wager.mode, side: wager.side };
+}
+
+// Prepare a Day from the upcoming availability declaration. Predeclared Null
+// Wagers enter the Day without consuming either Coin process.
+export function prepareDay(codes, ledger, nullCodes = [], toss = coin) {
+  assertUniqueCodes(codes);
+  assertUniqueCodes(nullCodes);
+  const nullSet = new Set(nullCodes);
+  if (nullCodes.some((code) => !codes.includes(code))) throw new Error("Null codes must identify a Wager in the Day");
+  const liveCodes = codes.filter((code) => !nullSet.has(code));
+  const wagers = flipDay(liveCodes, ledger, toss);
+  for (const code of codes) {
+    if (nullSet.has(code)) {
+      wagers[code] = {
+        mode: null,
+        side: null,
+        seed: false,
+        reference: null,
+        referenceSide: null,
+        nulled: true,
+        predeclared: true,
+      };
+    }
+  }
+  return wagers;
+}
+
+export function notation(entry) {
+  return entry?.null === true ? "∅" : `${entry.mode}${entry.side}`;
+}
+
+export function commitDay(day, ledger) {
+  if (!day || !Number.isInteger(day.day) || day.day < 1 || !day.wagers || typeof day.wagers !== "object") {
+    throw new TypeError("Cannot record an invalid Day");
+  }
+  if (!reconciled(day)) throw new Error("Cannot record an unresolved Wager");
+  const lastDay = Math.max(0, ...ledger.map((record) => record.day));
+  if (day.day <= lastDay) throw new Error("Ledger Days must be appended in ascending order");
+  const entries = {};
+  const definitions = {};
+  for (const [code, wager] of Object.entries(day.wagers)) {
+    entries[code] = entryFromWager(wager);
+    if (wager.definition) definitions[code] = { ...wager.definition };
+  }
+  const record = { day: day.day, date: day.date, entries };
+  if (Object.keys(definitions).length) record.definitions = definitions;
+  return [...ledger, record];
+}
+
+export function nextDayNumber(ledger, day = null) {
+  const lastRecorded = Math.max(0, ...ledger.map((record) => Number.isInteger(record?.day) ? record.day : 0));
+  return Math.max(lastRecorded, Number.isInteger(day?.day) ? day.day : 0) + 1;
 }
 
 // ── Arithmetic ────────────────────────────────────────────────────────────
@@ -134,7 +216,7 @@ export function stats(ledger, code) {
   for (const day of ledger) {
     const entry = day.entries[code];
     if (!entry) continue;
-    if (entry.null) {
+    if (entry.null === true) {
       nNull += 1;
       continue;
     }
@@ -164,7 +246,9 @@ export function stats(ledger, code) {
 // The rule is deterministic; the coin is uniform; p parameterizes open
 // resolution. Seeding follows the same first-constrained-resolves-open rule.
 
-export function simulate(p, steps) {
+export function simulate(p, steps, random = rnd) {
+  if (typeof p !== "number" || p < 0 || p > 1) throw new RangeError("Open Side probability must be between 0 and 1");
+  if (!Number.isInteger(steps) || steps < 1) throw new RangeError("Simulation steps must be a positive integer");
   let L = null;
   let K = null;
   let a = 0;
@@ -174,21 +258,25 @@ export function simulate(p, steps) {
   for (let t = 1; t <= steps; t += 1) {
     let mode;
     let side;
-    if (coin()) {
+    let reference = null;
+    if (coin(random)) {
       mode = "O";
-      side = rnd() < p ? "A" : "B";
+      side = random() < p ? "A" : "B";
     } else {
       mode = "C";
-      const referenceSide = coin() ? L : K;
-      side = referenceSide == null
-        ? (rnd() < p ? "A" : "B")
-        : invert(referenceSide);
+      if (K == null) {
+        side = random() < p ? "A" : "B";
+      } else {
+        reference = coin(random) ? "L" : "K";
+        const referenceSide = reference === "L" ? L : K;
+        side = invert(referenceSide);
+      }
     }
     L = side;
     if (mode === "C") K = side;
     n += 1;
     if (side === "A") a += 1;
-    series.push({ t, mode, side, pi: a / n });
+    series.push({ t, mode, reference, side, pi: a / n });
   }
 
   return series;
@@ -203,20 +291,25 @@ export function exportText(wagers, ledger) {
   lines.push("Wagers:");
   for (const wager of wagers) {
     lines.push(
-      `  ${wager.code}  ${wager.name}${wager.retired ? "  (retired)" : ""}`,
+      `  ${wager.code}  ${wager.name}  r${wager.revision || 1}${wager.retired ? "  (retired)" : ""}`,
     );
     lines.push(`      A: ${wager.a}`);
     lines.push(`      B: ${wager.b}`);
   }
   lines.push("");
-  lines.push("Days:");
-  const codes = wagers.map((wager) => wager.code);
-  for (const day of ledger) {
+  lines.push("Days (newest first):");
+  const codes = [...new Set([
+    ...wagers.map((wager) => wager.code),
+    ...ledger.flatMap((day) => Object.keys(day.entries)),
+  ])];
+  for (const day of [...ledger].sort((left, right) => right.day - left.day)) {
     const parts = codes
       .filter((code) => day.entries[code])
       .map((code) => {
         const entry = day.entries[code];
-        return entry.null ? `${code} null` : `${code} ${entry.mode}:${entry.side}`;
+        const revision = day.definitions?.[code]?.revision;
+        const suffix = revision ? ` r${revision}` : "";
+        return entry.null === true ? `${code} null${suffix}` : `${code} ${entry.mode}:${entry.side}${suffix}`;
       });
     const date = day.date ? day.date.slice(0, 10) : "";
     lines.push(
