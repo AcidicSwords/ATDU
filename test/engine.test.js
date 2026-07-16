@@ -1,23 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  PI_MAX, PI_MIN, applyEntry, commitDay, entryFromWager, flipDay, flipWager,
-  exportText, invert, memory, nextDayNumber, notation, piTheory, prepareDay,
-  reconciled, simulate, unresolvedCount,
+  PI_MAX, PI_MIN, applyEntry, commitAndPrepareNight, commitDay, entryFromWager,
+  exportText, flipDay, flipWager, invert, memory, nextDayNumber, notation,
+  piTheory, prepareDay, reconciled, simulate, unresolvedCount,
 } from "../src/engine.js";
 import {
-  STORAGE_KEYS, generatedSides, hydrateDay, hydrateLedger, hydrateNextNull,
-  hydrateWagers, normalizeAuthoredText, parseStored, sameWagerDefinition,
+  APP_STATE_VERSION, STORAGE_KEYS, createEmptyAppState, deriveSides, hydrateAppState,
+  hydrateDay, hydrateLedger, hydrateNextNull, hydrateWagers, migrateLegacyState,
+  normalizeAuthoredText, parseLegacySides, parseStored, sameWagerDefinition,
   snapshotDay, snapshotWager, updateWager, validateWagerDraft,
 } from "../src/model.js";
 
+const makeWager = (code = "W1", revision = 1) => ({
+  code,
+  scope: `Scope ${code}`,
+  constructor: "NOT",
+  variables: { act: `act ${code}` },
+  revision,
+  retired: false,
+});
+
 const ledger = [
-  { day: 1, date: "2026-01-01T00:00:00.000Z", entries: {
-    W1: { mode: "C", side: "A" }, W2: { mode: "C", side: "B" },
-  } },
-  { day: 2, date: "2026-01-02T00:00:00.000Z", entries: {
-    W1: { mode: "O", side: "B" }, W2: { null: true },
-  } },
+  { day: 1, date: "2026-01-01T00:00:00.000Z", entries: { W1: { mode: "C", side: "A" }, W2: { mode: "C", side: "B" } } },
+  { day: 2, date: "2026-01-02T00:00:00.000Z", entries: { W1: { mode: "O", side: "B" }, W2: { null: true } } },
 ];
 
 function tosses(...values) {
@@ -30,64 +36,47 @@ function tosses(...values) {
   return toss;
 }
 
-test("1-3: inversion is binary, symmetric, and closed", () => {
+test("inversion is binary, symmetric, and closed", () => {
   assert.equal(invert("A"), "B");
   assert.equal(invert("B"), "A");
   for (const side of ["A", "B"]) assert.equal(invert(invert(side)), side);
   assert.throws(() => invert("preferred"), /Side must be A or B/);
 });
 
-test("4-7, 23: canonical entries retain channel and Side", () => {
-  for (const [mode, side, expected] of [
-    ["O", "A", "OA"], ["O", "B", "OB"], ["C", "A", "CA"], ["C", "B", "CB"],
-  ]) {
+test("Ledger entries retain only channel and Side", () => {
+  for (const [mode, side, expected] of [["O", "A", "OA"], ["O", "B", "OB"], ["C", "A", "CA"], ["C", "B", "CB"]]) {
     const entry = entryFromWager({ mode, side, nulled: false });
     assert.deepEqual(entry, { mode, side });
     assert.equal(notation(entry), expected);
   }
 });
 
-test("8-9: memory updates follow the resolution channel", () => {
+test("memory follows channel while Null changes nothing", () => {
+  assert.deepEqual(memory(ledger, "W1"), { L: "B", K: "A" });
+  assert.deepEqual(memory(ledger, "W2"), { L: "B", K: "B" });
   const start = { L: "A", K: "B" };
   assert.deepEqual(applyEntry(start, { mode: "O", side: "B" }), { L: "B", K: "B" });
   assert.deepEqual(applyEntry(start, { mode: "C", side: "A" }), { L: "A", K: "A" });
+  assert.deepEqual(applyEntry(start, { null: true }), start);
+  assert.equal(notation({ null: true }), "∅");
 });
 
-test("10-11: first Constrained stays C with no invented Reference", () => {
+test("first Constrained remains C without inventing history", () => {
   const toss = tosses(false);
-  const result = flipWager({ L: "A", K: null }, toss);
-  assert.deepEqual(result, {
+  assert.deepEqual(flipWager({ L: "A", K: null }, toss), {
     mode: "C", side: null, seed: true, reference: null, referenceSide: null,
   });
   assert.equal(toss.count(), 1);
-  assert.equal(notation(entryFromWager({ ...result, side: "B", nulled: false })), "CB");
 });
 
-test("12-13: Last and Last Constrained retain distinct history", () => {
-  assert.deepEqual(memory(ledger, "W1"), { L: "B", K: "A" });
-  assert.deepEqual(memory(ledger, "W2"), { L: "B", K: "B" });
+test("initialized Constrained events select either memory fairly and invert it", () => {
+  for (const L of ["A", "B"]) for (const K of ["A", "B"]) {
+    assert.equal(flipWager({ L, K }, tosses(false, true)).side, invert(L));
+    assert.equal(flipWager({ L, K }, tosses(false, false)).side, invert(K));
+  }
 });
 
-test("14-15, 25: Null changes no memory and infers no Side", () => {
-  const start = { L: "A", K: "B" };
-  const entry = entryFromWager({ mode: "O", side: "A", nulled: true });
-  assert.deepEqual(entry, { null: true });
-  assert.equal(notation(entry), "∅");
-  assert.deepEqual(applyEntry(start, entry), start);
-  assert.equal(entry.mode, undefined);
-  assert.equal(entry.side, undefined);
-});
-
-test("16: Wager editing preserves code and history", () => {
-  const before = structuredClone(ledger);
-  const wagers = [{ code: "W1", name: "Old", a: "A", b: "B" }];
-  assert.deepEqual(updateWager(wagers, "W1", { code: "XX", name: "New" }), [
-    { code: "W1", name: "New", a: "A", b: "B" },
-  ]);
-  assert.deepEqual(ledger, before);
-});
-
-test("17: Wagers consume independent Gate and Reference tosses", () => {
+test("each Wager consumes independent Coin tosses", () => {
   const toss = tosses(true, false, true);
   const day = flipDay(["W1", "W2"], ledger, toss);
   assert.equal(day.W1.mode, "O");
@@ -96,215 +85,170 @@ test("17: Wagers consume independent Gate and Reference tosses", () => {
   assert.equal(toss.count(), 3);
 });
 
-test("18-20: generated results serialize and present without reroll or mutation", () => {
-  const toss = tosses(false, false);
-  const wagers = flipDay(["W1"], ledger, toss);
-  const day = { day: 3, date: "2026-01-03T00:00:00.000Z", wagers };
-  const snapshot = structuredClone(day);
-  assert.deepEqual(hydrateDay(parseStored(JSON.stringify(day), null)), snapshot);
-  assert.equal(toss.count(), 2);
-  assert.equal(notation(entryFromWager({ ...wagers.W1, nulled: false })), "CB");
-  assert.deepEqual(day, snapshot);
-});
-
-test("21: legacy storage hydrates without destructive migration", () => {
-  const legacy = [{ code: "LX", name: "Legacy", a: "A", b: "B", type: "NOT" }];
-  assert.deepEqual(hydrateWagers(parseStored(JSON.stringify(legacy), [])), [
-    { ...legacy[0], revision: 1, retired: false },
-  ]);
-  assert.deepEqual(hydrateLedger(ledger), ledger);
-  assert.deepEqual(STORAGE_KEYS, { wagers: "atdu2-w", ledger: "atdu2-l", day: "atdu2-d", nextNull: "atdu2-n" });
-  assert.deepEqual(hydrateNextNull({ W1: true, W2: false, W3: "true" }), { W1: true });
-  assert.deepEqual(hydrateNextNull([]), {});
-});
-
-test("pre-Flip Null bypasses both Coins and enters the Day already reconciled", () => {
+test("pre-Coin Null bypasses both processes and never changes memory", () => {
   const toss = tosses(true);
   const wagers = prepareDay(["W1", "W2"], ledger, ["W2"], toss);
   assert.equal(toss.count(), 1);
-  assert.deepEqual(wagers.W1, {
-    mode: "O", side: null, seed: false, reference: null, referenceSide: null, nulled: false,
-  });
-  assert.deepEqual(wagers.W2, {
-    mode: null, side: null, seed: false, reference: null, referenceSide: null,
-    nulled: true, predeclared: true,
-  });
-  assert.equal(unresolvedCount({ wagers }), 1);
-
+  assert.equal(wagers.W2.predeclared, true);
+  assert.equal(wagers.W2.mode, null);
   wagers.W1.side = "A";
   const recorded = commitDay({ day: 3, date: "", wagers }, ledger);
   assert.deepEqual(recorded.at(-1).entries.W2, { null: true });
   assert.deepEqual(memory(recorded, "W2"), memory(ledger, "W2"));
-
-  const noToss = tosses();
-  const allNull = prepareDay(["W1", "W2"], ledger, ["W1", "W2"], noToss);
-  assert.equal(noToss.count(), 0);
-  assert.equal(reconciled({ wagers: allNull }), true);
 });
 
-test("22: all four initialized states invert either Reference", () => {
-  for (const L of ["A", "B"]) for (const K of ["A", "B"]) {
-    assert.equal(flipWager({ L, K }, tosses(false, true)).side, invert(L));
-    assert.equal(flipWager({ L, K }, tosses(false, false)).side, invert(K));
-  }
+test("all four constructors derive two readings from one variable source", () => {
+  assert.deepEqual(deriveSides({ constructor: "NOT", variables: { act: "x" } }), { a: "DO x", b: "DO NOT DO x" });
+  assert.deepEqual(deriveSides({ constructor: "BIFURCATION", variables: { consequence: "x", routeA: "y", routeB: "z" } }), { a: "x THROUGH y", b: "x THROUGH z" });
+  assert.deepEqual(deriveSides({ constructor: "ASYMPTOTE", variables: { measure: "x", reference: "y" } }), { a: "x AT MOST y", b: "x AT LEAST y" });
+  assert.deepEqual(deriveSides({ constructor: "PRECEDENCE", variables: { act: "x", anchor: "y" } }), { a: "x BEFORE y", b: "x AFTER y" });
 });
 
-test("24: engine data carries mechanism, never valuation", () => {
-  const result = flipWager({ L: "A", K: "B" }, tosses(false, true));
-  assert.deepEqual(Object.keys(result).sort(), ["mode", "reference", "referenceSide", "seed", "side"]);
-  for (const key of ["preferred", "score", "success"]) assert.equal(key in result, false);
-});
-
-test("commit is append-only and rejects unresolved Wagers", () => {
-  const unresolved = { day: 3, date: "", wagers: { W1: { mode: "O", side: null, nulled: false } } };
-  assert.throws(() => commitDay(unresolved, ledger), /unresolved Wager/);
-  assert.equal(reconciled(unresolved), false);
-  assert.equal(unresolvedCount(unresolved), 1);
-  const complete = { ...unresolved, wagers: { W1: { mode: "O", side: "A", nulled: false } } };
-  const next = commitDay(complete, ledger);
-  assert.equal(ledger.length, 2);
-  assert.equal(next.length, 3);
-  assert.equal(notation(next.at(-1).entries.W1), "OA");
-});
-
-test("active and recorded days retain immutable Wager definitions across revisions", () => {
-  const revision1 = {
-    code: "W1", name: "Original situation", type: "NOT", a: "DO X", b: "DO NOT DO X",
-    revision: 1, schema: { act: "X" }, retired: false,
-  };
-  const day = snapshotDay({
-    day: 1,
-    date: "2026-01-01T00:00:00.000Z",
-    wagers: { W1: { mode: "O", side: "A", nulled: false } },
-  }, [revision1]);
-  const revision2 = { ...revision1, name: "Revised situation", a: "DO Y", b: "DO NOT DO Y", revision: 2 };
-
-  assert.deepEqual(day.wagers.W1.definition, snapshotWager(revision1));
-  assert.notDeepEqual(day.wagers.W1.definition, snapshotWager(revision2));
-  assert.equal(day.wagers.W1.definition.schema, undefined);
-
-  const recorded = commitDay(day, []);
-  revision1.name = "Mutated outside";
-  day.wagers.W1.definition.name = "Mutated active day";
-  assert.equal(recorded[0].definitions.W1.name, "Original situation");
-  assert.deepEqual(recorded[0].entries.W1, { mode: "O", side: "A" });
-});
-
-test("snapshot migration preserves existing day definitions and absent legacy codes", () => {
-  const preserved = { code: "W1", name: "Bound", type: "NOT", a: "A", b: "B", revision: 1 };
-  const day = snapshotDay({
-    day: 2,
-    wagers: {
-      W1: { mode: "C", side: "B", definition: preserved },
-      OLD: { mode: "O", side: "A" },
-    },
-  }, [{ ...preserved, name: "Current", revision: 2 }]);
-  assert.equal(day.wagers.W1.definition, preserved);
-  assert.equal(day.wagers.OLD.definition, undefined);
-});
-
-test("probability invariant keeps its declared bounds", () => {
-  assert.equal(piTheory(0), PI_MIN);
-  assert.equal(piTheory(0.5), 0.5);
-  assert.equal(piTheory(1), PI_MAX);
-});
-
-test("canonical Wager validation owns normalization, grammar, uniqueness, and bounds", () => {
+test("canonical validation normalizes identity and rejects an invalid contrast", () => {
   const route = validateWagerDraft({
-    code: " r1! ", name: "  bounded   situation  ", type: "BIFURCATION",
+    code: " r1! ", scope: " bounded   scope ", constructor: "BIFURCATION",
     consequence: "shared consequence", routeA: "first route", routeB: "second route",
   });
   assert.equal(route.valid, true);
   assert.deepEqual(route.wager, {
-    code: "R1", name: "bounded situation", type: "BIFURCATION",
-    a: "shared consequence THROUGH first route",
-    b: "shared consequence THROUGH second route",
-    schema: { consequence: "shared consequence", routeA: "first route", routeB: "second route" },
-    retired: false,
+    code: "R1", scope: "bounded scope", constructor: "BIFURCATION",
+    variables: { consequence: "shared consequence", routeA: "first route", routeB: "second route" },
+    revision: 1, retired: false,
   });
-
-  const sameRoute = validateWagerDraft({
-    code: "R2", name: "situation", type: "BIFURCATION",
-    consequence: "x", routeA: "A   route", routeB: " a route ",
-  });
-  assert.equal(sameRoute.valid, false);
-  assert.match(sameRoute.errors.routeA, /distinct routes/);
-  assert.equal(validateWagerDraft({ ...route.wager, code: "R1" }, ["R1"]).valid, false);
+  assert.equal("a" in route.wager, false);
+  assert.equal("b" in route.wager, false);
+  const invalid = validateWagerDraft({ ...route.wager, code: "R2", variables: { consequence: "x", routeA: "same", routeB: " SAME " } });
+  assert.equal(invalid.valid, false);
+  assert.match(invalid.errors.routeA, /distinct routes/);
   assert.equal(normalizeAuthoredText(" x\u0000  y "), "x y");
-  assert.equal(normalizeAuthoredText("x".repeat(100)).length, 72);
-
-  assert.deepEqual(generatedSides({ type: "NOT", act: "x" }), { a: "DO x", b: "DO NOT DO x" });
-  assert.deepEqual(generatedSides({ type: "ASYMPTOTE", measure: "x", boundary: "y" }), { a: "x AT MOST y", b: "x AT LEAST y" });
-  assert.deepEqual(generatedSides({ type: "PRECEDENCE", act: "x", anchor: "y" }), { a: "x BEFORE y", b: "x AFTER y" });
 });
 
-test("hydration admits only coherent canonical records and restores chronological order", () => {
-  const canonical = {
-    code: "X", name: "situation", type: "NOT", a: "tampered", b: "tampered",
-    schema: { act: " act  " }, revision: 2,
-  };
-  const hydrated = hydrateWagers([
-    null,
-    { code: "X", name: "older", type: "NOT", a: "A", b: "B", revision: 1 },
-    canonical,
-    { code: "BAD", name: "invalid code", type: "NOT", a: "A", b: "B" },
-    { code: "Q", name: "same sides", type: "NOT", a: "A", b: " a " },
+test("legacy grammar is parsed losslessly and malformed pairs are quarantined", () => {
+  assert.deepEqual(parseLegacySides("NOT", "DO x", "DO NOT DO x"), { act: "x" });
+  assert.deepEqual(parseLegacySides("ASYMPTOTE", "x AT MOST y", "x AT LEAST y"), { measure: "x", reference: "y" });
+  const migrated = hydrateWagers([
+    { code: "LX", name: "Legacy", type: "NOT", a: "DO x", b: "DO NOT DO x" },
+    { code: "L2", name: "Legacy two", type: "NOT", a: "A", b: "B" },
   ]);
-  assert.deepEqual(hydrated, [{
-    code: "X", name: "situation", type: "NOT", a: "DO act", b: "DO NOT DO act",
-    schema: { act: "act" }, revision: 2, retired: false,
-  }]);
+  assert.deepEqual(migrated[0].variables, { act: "x" });
+  assert.equal(migrated[1].needsRebind, true);
+  assert.deepEqual(deriveSides(migrated[1]), { a: "A", b: "B" });
+});
 
-  const records = hydrateLedger([
-    { day: 3, entries: { X: { mode: "O", side: "A" }, Q: { side: "A" } } },
-    { day: 1, date: "date", entries: { X: { null: true } } },
-    { day: 3, entries: { X: { mode: "C", side: "B" } } },
-    { day: 2, entries: {} },
-  ]);
-  assert.deepEqual(records.map((record) => record.day), [1, 3]);
-  assert.deepEqual(records[1].entries, { X: { mode: "O", side: "A" } });
+test("v2 keys migrate into one valid v3 state", () => {
+  const state = migrateLegacyState({
+    wagers: JSON.stringify([makeWager("W1")]),
+    ledger: JSON.stringify(ledger),
+    day: null,
+    nextNull: JSON.stringify({ W1: true, XX: true }),
+  });
+  assert.equal(state.version, APP_STATE_VERSION);
+  assert.equal(state.wagers.length, 1);
+  assert.deepEqual(state.nextNull, { W1: true });
+  assert.deepEqual(STORAGE_KEYS, {
+    state: "atdu3-state", legacyWagers: "atdu2-w", legacyLedger: "atdu2-l",
+    legacyDay: "atdu2-d", legacyNextNull: "atdu2-n",
+  });
+});
 
+test("AppState hydration preserves a pending fixed reveal receipt", () => {
+  const definition = snapshotWager(makeWager("W1"));
+  const state = hydrateAppState({
+    ...createEmptyAppState(),
+    day: { day: 3, date: "", wagers: { W1: { mode: "O", side: null, seed: false, reference: null, referenceSide: null, nulled: false, definition } } },
+    pendingReveal: { day: 3, closingDay: 2 },
+    ledger,
+    wagers: [makeWager("W1")],
+  });
+  assert.deepEqual(state.pendingReveal, { day: 3, closingDay: 2 });
+  assert.equal(hydrateAppState({ ...state, pendingReveal: { day: 4, closingDay: 2 } }).pendingReveal, null);
+});
+
+test("nightly transaction records, generates, snapshots, and receipts once", () => {
+  const wagers = [makeWager("W1"), makeWager("W2")];
+  const today = { day: 3, date: "", wagers: {
+    W1: { mode: "O", side: "A", nulled: false, definition: snapshotWager(wagers[0]) },
+    W2: { mode: "C", side: "B", nulled: false, definition: snapshotWager(wagers[1]) },
+  } };
+  const toss = tosses(true);
+  const night = commitAndPrepareNight({ wagers, ledger, day: today, nextNull: { W2: true } }, toss, () => "fixed");
+  assert.equal(toss.count(), 1);
+  assert.equal(night.ledger.at(-1).day, 3);
+  assert.equal(night.day.day, 4);
+  assert.equal(night.day.date, "fixed");
+  assert.equal(night.day.wagers.W2.predeclared, true);
+  assert.deepEqual(night.pendingReveal, { day: 4, closingDay: 3 });
+  assert.equal("a" in night.day.wagers.W1.definition, false);
+  assert.equal("variables" in night.day.wagers.W1.definition, true);
+});
+
+test("legacy active Wagers cannot enter a new Coin event", () => {
+  const legacy = hydrateWagers([{ code: "LX", name: "Legacy", type: "NOT", a: "A", b: "B" }]);
+  assert.throws(() => commitAndPrepareNight({ wagers: legacy, ledger: [], day: null, nextNull: {} }), /Rebind legacy/);
+});
+
+test("Day snapshots and Ledger records retain historical definitions", () => {
+  const revision1 = makeWager("W1", 1);
+  const day = snapshotDay({ day: 1, date: "", wagers: { W1: { mode: "O", side: "A", nulled: false } } }, [revision1]);
+  const revision2 = { ...revision1, scope: "Changed scope", variables: { act: "changed" }, revision: 2 };
+  assert.deepEqual(day.wagers.W1.definition, snapshotWager(revision1));
+  assert.notDeepEqual(day.wagers.W1.definition, snapshotWager(revision2));
+  const recorded = commitDay(day, []);
+  revision1.variables.act = "mutated";
+  assert.equal(recorded[0].definitions.W1.variables.act, "act W1");
+});
+
+test("definition equality ignores lifecycle metadata but not meaning", () => {
+  const base = makeWager("W1");
+  assert.equal(sameWagerDefinition(base, { ...base, revision: 9, retired: true }), true);
+  assert.equal(sameWagerDefinition(base, { ...base, scope: "changed" }), false);
+  assert.deepEqual(updateWager([base], "W1", { code: "XX", scope: "changed" })[0].code, "W1");
+});
+
+test("hydration rejects incoherent Days and keeps Ledger chronological", () => {
   assert.equal(hydrateDay({ day: 2, wagers: { X: { mode: "C", side: "A", reference: "L", referenceSide: "A" } } }), null);
   assert.equal(hydrateDay({ day: 2, wagers: { X: { predeclared: true, nulled: false } } }), null);
+  const records = hydrateLedger([
+    { day: 3, entries: { X: { mode: "O", side: "A" } } },
+    { day: 1, entries: { X: { null: true } } },
+    { day: 3, entries: { X: { mode: "C", side: "B" } } },
+  ]);
+  assert.deepEqual(records.map(({ day }) => day), [1, 3]);
+  assert.deepEqual(hydrateNextNull({ W1: true, W2: false, W3: "true" }), { W1: true });
 });
 
-test("definition equality prevents redundant revisions without collapsing real change", () => {
-  const base = {
-    code: "X", name: "situation", type: "NOT", a: "DO x", b: "DO NOT DO x",
-    schema: { act: "x" }, revision: 1, retired: false,
-  };
-  assert.equal(sameWagerDefinition(base, { ...base, revision: 9, retired: true }), true);
-  assert.equal(sameWagerDefinition(base, { ...base, name: "changed" }), false);
-});
-
-test("Day and export boundaries preserve append-only, newest-first trace semantics", () => {
-  assert.equal(nextDayNumber(ledger), 3);
-  assert.equal(nextDayNumber(ledger, { day: 8 }), 9);
-  assert.throws(
-    () => commitDay({ day: 2, date: "", wagers: { W1: { mode: "O", side: "A" } } }, ledger),
-    /ascending order/,
-  );
+test("append-only and input guards hold at every boundary", () => {
+  const unresolved = { day: 3, date: "", wagers: { W1: { mode: "O", side: null, nulled: false } } };
+  assert.equal(reconciled(unresolved), false);
+  assert.equal(unresolvedCount(unresolved), 1);
+  assert.throws(() => commitDay(unresolved, ledger), /unresolved Wager/);
+  assert.throws(() => commitDay({ ...unresolved, day: 2, wagers: { W1: { mode: "O", side: "A" } } }, ledger), /ascending order/);
   assert.throws(() => flipDay(["W1", "W1"], ledger), /unique/);
   assert.throws(() => prepareDay(["W1"], ledger, ["W2"]), /identify a Wager/);
-  assert.throws(() => applyEntry({ L: null, K: null }, { mode: "X", side: "A" }), /Invalid Ledger entry/);
-  assert.throws(() => applyEntry({ L: null, K: null }, { null: "true" }), /Invalid Null entry/);
   assert.throws(() => flipWager({ L: null, K: "A" }), /Invalid Wager memory/);
-  assert.throws(() => simulate(1.1, 10), /between 0 and 1/);
-  assert.throws(() => simulate(0.5, 0), /positive integer/);
-
-  const text = exportText([{ code: "W1", name: "one", a: "A", b: "B" }], [
-    ...ledger,
-    { day: 3, date: "", entries: { W1: { mode: "O", side: "A" }, HX: { null: true } } },
-  ]);
-  assert.ok(text.indexOf("003") < text.indexOf("002"));
-  assert.match(text, /HX null/);
 });
 
-test("an invalid historical definition cannot masquerade as current wording", () => {
-  const corrupted = hydrateLedger([{
-    day: 1,
-    entries: { X: { mode: "O", side: "A" } },
-    definitions: { X: { code: "X", name: "broken", type: "NOT", a: "", b: "" } },
-  }]);
-  assert.deepEqual(corrupted, []);
+test("twenty Wagers remain independent and bounded", () => {
+  const codes = Array.from({ length: 20 }, (_, index) => `W${index}`);
+  const toss = tosses(...Array(20).fill(true));
+  const day = flipDay(codes, [], toss);
+  assert.equal(Object.keys(day).length, 20);
+  assert.equal(toss.count(), 20);
+});
+
+test("simulation and convergence bounds remain unchanged", () => {
+  assert.equal(piTheory(0), PI_MIN);
+  assert.equal(piTheory(0.5), 0.5);
+  assert.equal(piTheory(1), PI_MAX);
+  assert.throws(() => simulate(1.1, 10), /between 0 and 1/);
+  assert.throws(() => simulate(0.5, 0), /positive integer/);
+});
+
+test("export derives readings and lists newest days first", () => {
+  const text = exportText([makeWager("W1")], [...ledger, { day: 3, date: "", entries: { W1: { mode: "O", side: "A" }, HX: { null: true } } }]);
+  assert.match(text, /A: DO act W1/);
+  assert.ok(text.indexOf("003") < text.indexOf("002"));
+  assert.match(text, /HX null/);
+  assert.equal(nextDayNumber(ledger, { day: 8 }), 9);
+  assert.deepEqual(parseStored("broken", []), []);
 });

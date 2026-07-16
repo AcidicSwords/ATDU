@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  commitDay,
+  commitAndPrepareNight,
   exportText,
   memory,
   notation,
@@ -8,27 +8,24 @@ import {
   PI_MAX,
   PI_MIN,
   piTheory,
-  prepareDay,
   reconciled,
   simulate,
   unresolvedCount,
 } from "./engine.js";
 import { storage } from "./storage.js";
 import {
+  createEmptyAppState,
+  deriveSides,
+  hydrateAppState,
   STORAGE_KEYS,
   TEXT_LIMITS,
   WAGER_STRUCTURES,
-  hydrateDay,
-  hydrateLedger,
-  hydrateNextNull,
-  hydrateWagers,
+  migrateLegacyState,
   normalizeAuthoredText,
   normalizeCode,
   parseStored,
   sameWagerDefinition,
-  schemaFromDraft,
-  snapshotDay,
-  snapshotWager,
+  variablesFromDraft,
   updateWager,
   validateWagerDraft,
 } from "./model.js";
@@ -36,14 +33,14 @@ import "./App.css";
 
 const EMPTY_DRAFT = {
   code: "",
-  name: "",
-  type: "NOT",
+  scope: "",
+  constructor: "NOT",
   act: "",
   consequence: "",
   routeA: "",
   routeB: "",
   measure: "",
-  boundary: "",
+  reference: "",
   anchor: "",
 };
 
@@ -141,26 +138,15 @@ async function storageGet(key) {
 
 async function storageSet(key, value) {
   try {
-    await storage.set(key, value);
+    return await storage.set(key, value);
   } catch {
-    // The interface remains usable if persistence is unavailable.
+    return false;
   }
-}
-
-async function storageDelete(key) {
-  try {
-    await storage.delete(key);
-  } catch {
-    // No-op.
-  }
-}
-
-function todayISO() {
-  return new Date().toISOString();
 }
 
 function sideText(wager, side) {
-  return side === "A" ? wager.a : wager.b;
+  const sides = deriveSides(wager);
+  return side === "A" ? sides.a : sides.b;
 }
 
 function SideContent({ wager, side }) {
@@ -201,33 +187,33 @@ function PhysicalCoin({ className = "" }) {
 }
 
 function structureLabel(wager) {
-  return WAGER_STRUCTURES.find((item) => item.key === wager.type)?.label || wager.type;
+  return WAGER_STRUCTURES.find((item) => item.key === wager.constructor)?.label || wager.constructor;
 }
 
 function WagerIdentity({ wager, meta, className = "" }) {
   return (
     <div className={`wager-identity ${className}`}>
       <strong>{wager.code}</strong>
-      <span>{wager.name}</span>
+      <span>{wager.scope}</span>
       <small>{meta || structureLabel(wager)}</small>
     </div>
   );
 }
 
 function draftFromWager(wager) {
-  const schema = wager.schema || {};
+  const variables = wager.variables || {};
   return {
     ...EMPTY_DRAFT,
     code: wager.code,
-    name: wager.name,
-    type: wager.type || "NOT",
-    act: schema.act || "",
-    consequence: schema.consequence || "",
-    routeA: schema.routeA || "",
-    routeB: schema.routeB || "",
-    measure: schema.measure || "",
-    boundary: schema.reference || [schema.boundary, schema.unit].filter(Boolean).join(" "),
-    anchor: schema.anchor || "",
+    scope: wager.scope,
+    constructor: wager.constructor || "NOT",
+    act: variables.act || "",
+    consequence: variables.consequence || "",
+    routeA: variables.routeA || "",
+    routeB: variables.routeB || "",
+    measure: variables.measure || "",
+    reference: variables.reference || "",
+    anchor: variables.anchor || "",
   };
 }
 
@@ -251,14 +237,15 @@ function Field({ label, children, hint, error, value = "", limit }) {
 }
 
 function WagerGeometry({ wager, compact = false }) {
-  const type = wager.type || "NOT";
+  const constructor = wager.constructor || "NOT";
+  const sides = deriveSides(wager);
 
   return (
     <div
-      className={`wager-geometry wager-geometry--${type.toLowerCase()} ${
+      className={`wager-geometry wager-geometry--${constructor.toLowerCase()} ${
         compact ? "wager-geometry--compact" : ""
       }`}
-      aria-label={`Side A: ${wager.a}. Side B: ${wager.b}.`}
+      aria-label={`Side A: ${sides.a}. Side B: ${sides.b}.`}
     >
       <div
         className="wager-geometry__side wager-geometry__side--a"
@@ -279,18 +266,16 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
   const [draft, setDraft] = useState(initial || EMPTY_DRAFT);
   const [attempted, setAttempted] = useState(false);
   const validation = validateWagerDraft(draft, existingCodes, initialWager?.code);
-  const { errors, sides, valid } = validation;
+  const { errors, valid } = validation;
   const normalizedCode = normalizeCode(draft.code);
   const unchanged = Boolean(initialWager && valid && sameWagerDefinition(initialWager, validation.wager));
   const shownError = (key) => attempted ? errors[key] : null;
 
   const preview = {
     code: normalizedCode || "—",
-    name: normalizeAuthoredText(draft.name, TEXT_LIMITS.situation) || "Wager",
-    type: draft.type,
-    a: sides.a || WAGER_STRUCTURES.find((item) => item.key === draft.type)?.form.split(" / ")[0],
-    b: sides.b || WAGER_STRUCTURES.find((item) => item.key === draft.type)?.form.split(" / ")[1],
-    schema: schemaFromDraft(draft),
+    scope: normalizeAuthoredText(draft.scope, TEXT_LIMITS.scope) || "Scope not yet defined",
+    constructor: draft.constructor,
+    variables: variablesFromDraft(draft),
   };
 
   const set = (key, value, limit = TEXT_LIMITS.term) =>
@@ -314,7 +299,7 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
       <div className="panel-heading">
         <div>
           <span className="eyebrow">Wager</span>
-          <h1>{title || "Place Wager"}</h1>
+          <h1>{title || "Bind Wager"}</h1>
         </div>
         {onCancel ? (
           <button className="icon-button" type="button" onClick={onCancel} aria-label="Close">
@@ -339,18 +324,18 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
           />
         </Field>
         <Field
-          label="Situation"
+          label="Scope"
           hint="The bounded circumstance in which this Wager exists."
-          value={draft.name}
-          limit={TEXT_LIMITS.situation}
-          error={shownError("name")}
+          value={draft.scope}
+          limit={TEXT_LIMITS.scope}
+          error={shownError("scope")}
         >
           <input
-            value={draft.name}
-            onChange={(event) => set("name", event.target.value, TEXT_LIMITS.situation)}
-            maxLength={TEXT_LIMITS.situation}
+            value={draft.scope}
+            onChange={(event) => set("scope", event.target.value, TEXT_LIMITS.scope)}
+            maxLength={TEXT_LIMITS.scope}
             required
-            aria-invalid={Boolean(shownError("name"))}
+            aria-invalid={Boolean(shownError("scope"))}
           />
         </Field>
       </div>
@@ -362,11 +347,11 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
             <button
               key={structure.key}
               type="button"
-              className={draft.type === structure.key ? "is-selected" : ""}
-              aria-pressed={draft.type === structure.key}
+              className={draft.constructor === structure.key ? "is-selected" : ""}
+              aria-pressed={draft.constructor === structure.key}
               onClick={() => {
                 haptic(8);
-                setDraft((current) => ({ ...current, type: structure.key }));
+                setDraft((current) => ({ ...current, constructor: structure.key }));
               }}
             >
               <strong>{structure.form}</strong>
@@ -377,7 +362,7 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
       </fieldset>
 
       <div className="builder__definition">
-        {draft.type === "NOT" ? (
+        {draft.constructor === "NOT" ? (
           <Field label="X — Act" hint="The shared act in both resolved Sides." value={draft.act} limit={TEXT_LIMITS.term} error={shownError("act")}>
             <input
               value={draft.act}
@@ -390,7 +375,7 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
           </Field>
         ) : null}
 
-        {draft.type === "BIFURCATION" ? (
+        {draft.constructor === "BIFURCATION" ? (
           <>
             <Field label="X — Shared consequence" hint="The consequence held invariant across both routes." value={draft.consequence} limit={TEXT_LIMITS.term} error={shownError("consequence")}>
               <input
@@ -427,7 +412,7 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
           </>
         ) : null}
 
-        {draft.type === "ASYMPTOTE" ? (
+        {draft.constructor === "ASYMPTOTE" ? (
           <div className="builder__two-fields">
             <Field label="X — Measure" hint="The shared variable resolved around one boundary." value={draft.measure} limit={TEXT_LIMITS.term} error={shownError("measure")}>
               <input
@@ -439,20 +424,20 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
                 aria-invalid={Boolean(shownError("measure"))}
               />
             </Field>
-            <Field label="Y — Reference" hint="The shared midpoint, threshold, limit, or other reference." value={draft.boundary} limit={TEXT_LIMITS.term} error={shownError("boundary")}>
+            <Field label="Y — Reference" hint="The shared midpoint, threshold, limit, or other reference." value={draft.reference} limit={TEXT_LIMITS.term} error={shownError("reference")}>
               <input
-                value={draft.boundary}
-                onChange={(event) => set("boundary", event.target.value)}
+                value={draft.reference}
+                onChange={(event) => set("reference", event.target.value)}
                 maxLength={TEXT_LIMITS.term}
                 placeholder="Y"
                 required
-                aria-invalid={Boolean(shownError("boundary"))}
+                aria-invalid={Boolean(shownError("reference"))}
               />
             </Field>
           </div>
         ) : null}
 
-        {draft.type === "PRECEDENCE" ? (
+        {draft.constructor === "PRECEDENCE" ? (
           <>
             <Field label="X — Act or event" value={draft.act} limit={TEXT_LIMITS.term} error={shownError("act")}>
               <input
@@ -479,12 +464,14 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
       </div>
 
       <div className="builder__preview">
-        <span className="eyebrow">Wager object</span>
+        <span className="eyebrow">Both readings</span>
         <div className="wager-ticket">
           <WagerIdentity wager={preview} className="wager-ticket__head" />
           <WagerGeometry wager={preview} />
         </div>
       </div>
+
+      <p className="builder__availability">Active only while both readings are available.</p>
 
       {unchanged ? <p className="form-status">No definition has changed; no revision is required.</p> : null}
 
@@ -495,7 +482,7 @@ function WagerBuilder({ initial, initialWager, existingCodes, onPlace, onCancel,
           </button>
         ) : null}
         <button type="submit" className="button button--primary" disabled={unchanged}>
-          {unchanged ? "No changes" : initial ? "Revise Wager" : "Place Wager"}
+          {unchanged ? "No changes" : initial ? "Bind revision" : "Bind Wager"}
         </button>
       </div>
     </form>
@@ -513,7 +500,7 @@ function WagerTicket({ wager, notice, onEdit, onRetire, onRestore }) {
           <button className="text-button" onClick={onRestore}>Restore</button>
         ) : (
           <>
-            {onEdit ? <button className="text-button" onClick={onEdit}>Revise</button> : null}
+            {onEdit ? <button className="text-button" onClick={onEdit}>{wager.needsRebind ? "Rebind" : "Revise"}</button> : null}
             <button className="text-button" onClick={onRetire}>Retire</button>
           </>
         )}
@@ -572,7 +559,7 @@ function WagerSurface({ wagers, saveWagers, day }) {
           initial={existing ? draftFromWager(existing) : null}
           initialWager={existing}
           existingCodes={wagers.map((wager) => wager.code)}
-          title={existing ? "Revise Wager" : "Place Wager"}
+          title={existing ? existing.needsRebind ? "Rebind Wager" : "Revise Wager" : "Bind Wager"}
           onPlace={place}
           onCancel={() => setBuilder(null)}
         />
@@ -589,7 +576,7 @@ function WagerSurface({ wagers, saveWagers, day }) {
         </div>
         {active.length ? (
           <button className="button button--primary" onClick={() => setBuilder({})}>
-            Place Wager
+            Bind Wager
           </button>
         ) : null}
       </div>
@@ -600,14 +587,16 @@ function WagerSurface({ wagers, saveWagers, day }) {
             <WagerTicket
               key={wager.code}
               wager={wager}
-              notice={day
+              notice={wager.needsRebind
+                ? "Rebind this legacy definition before the next Coin"
+                : day
                 ? !day.wagers[wager.code]
                   ? `Added for the Flip after Day ${day.day}`
                   : (day.wagers[wager.code].definition?.revision || 1) !== (wager.revision || 1)
                     ? `Revision ${wager.revision || 1} applies after Day ${day.day}`
                     : null
                 : null}
-              onEdit={wager.schema ? () => setBuilder({ code: wager.code }) : null}
+              onEdit={() => setBuilder({ code: wager.code })}
               onRetire={() => retire(wager.code)}
             />
           ))}
@@ -618,7 +607,7 @@ function WagerSurface({ wagers, saveWagers, day }) {
           <h2>No active Wagers</h2>
           <p>A Wager defines the field of the Flip.</p>
           <button className="button button--primary" onClick={() => setBuilder({})}>
-            Place first Wager
+            Bind first Wager
           </button>
         </div>
       )}
@@ -731,9 +720,9 @@ function Reel({
   );
 }
 
-function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = [], sound, onFinished }) {
+function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = [], sound, onFinished, initialPhase = null }) {
   const [index, setIndex] = useState(-1);
-  const [phase, setPhase] = useState(closingDay ? "record" : "day");
+  const [phase, setPhase] = useState(initialPhase || (closingDay ? "record" : "day"));
   const timers = useRef([]);
   const dialogRef = useRef(null);
   const reducedMotion = useMemo(
@@ -904,9 +893,9 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
   ]);
 
   const open = current?.mode === "O";
-  const gateValue = open ? "OPEN" : "CONSTRAINED";
+  const gateValue = open ? "YOU" : "COIN";
   const conditionDisplay = phase === "load" ? "READY" : gateValue;
-  const referenceValue = current?.reference === "L" ? "LAST SIDE" : "LAST CONSTRAINED SIDE";
+  const referenceValue = current?.reference === "L" ? "MOST RECENT SIDE" : "MOST RECENT COIN-DECIDED SIDE";
   const referenceDisplay = ["reference-spin", "reference-brake", "reference-land", "invert", "resolved"].includes(phase)
     ? referenceValue
     : "READY";
@@ -961,8 +950,8 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
                 revealAll();
               }}
             >
-              <span className="event-reveal-all__long">Reveal all</span>
-              <span className="event-reveal-all__short">All</span>
+              <span className="event-reveal-all__long">Show ticket</span>
+              <span className="event-reveal-all__short">Ticket</span>
             </button>
           ) : null}
         </div>
@@ -1004,13 +993,13 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
             <div className="mechanism-deck" aria-label="Flip mechanism">
               <section className={`mechanism-step ${firstCoinSpinning ? "is-active" : gateComplete ? "is-complete" : ""}`}>
                 <header>
-                  <span>Condition</span>
-                  <small>{gateComplete ? "Resolved" : "Coin"}</small>
+                  <span>Who decides?</span>
+                  <small>{gateComplete ? "Resolved" : firstCoinSpinning ? "Rolling" : "Pending"}</small>
                 </header>
                 <Reel
-                  label="Environmental condition"
+                  label="Who decides?"
                   value={conditionDisplay}
-                  options={["OPEN", "CONSTRAINED"]}
+                  options={["YOU", "COIN"]}
                   spinning={firstCoinSpinning}
                   braking={phase === "gate-brake"}
                   tone={open ? "open" : "constrained"}
@@ -1020,27 +1009,27 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
 
               <section className={`mechanism-step ${agentActive ? "is-active" : gateComplete ? "is-complete" : "is-waiting"}`}>
                 <header>
-                  <span>Agent</span>
-                  <small>{awaitingCondition ? "Pending" : agentCoinRequired ? "Coin" : "You"}</small>
+                  <span>{awaitingCondition ? "Next" : agentCoinRequired ? "Coin uses" : current?.seed ? "First Side" : "Decision"}</span>
+                  <small>{awaitingCondition ? "Pending" : agentCoinRequired ? "Coin" : "Tomorrow"}</small>
                 </header>
                 {awaitingCondition ? (
                   <div className="mechanism-pending">
                     <CoinGlyph />
-                    <span>Awaits condition</span>
+                    <span>Waits for first Coin</span>
                   </div>
                 ) : agentCoinRequired ? (
                   <Reel
-                    label="Memory selected"
+                    label="Coin uses"
                     value={referenceDisplay}
-                    options={["LAST SIDE", "LAST CONSTRAINED SIDE"]}
+                    options={["MOST RECENT SIDE", "MOST RECENT COIN-DECIDED SIDE"]}
                     spinning={secondCoinSpinning}
                     braking={phase === "reference-brake"}
                     duration={Math.max(450, 2800 * pace)}
                   />
                 ) : (
                   <div className="mechanism-pending mechanism-pending--resolved">
-                    <span>YOU</span>
-                    <small>{open ? "Select after entry" : "Establish first Side"}</small>
+                    <span>{open ? "DECIDE TOMORROW" : "DECIDE FIRST SIDE TOMORROW"}</span>
+                    <small>{open ? "Both Sides available" : "No Coin history yet"}</small>
                   </div>
                 )}
               </section>
@@ -1056,17 +1045,17 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
 
               {phase === "open" ? (
                 <div className="event-result event-result--open">
-                  <span>Open condition · You resolve</span>
-                  <strong className="agent-handoff">You are the agent</strong>
-                  <small>Both defined Sides remain available. Resolve one after entry.</small>
+                  <span>You decide</span>
+                  <strong className="agent-handoff">Decide tomorrow</strong>
+                  <small>Both defined Sides remain available.</small>
                 </div>
               ) : null}
 
               {phase === "seed" ? (
                 <div className="event-result">
-                  <span>Constrained condition · You establish the first Side</span>
-                  <strong className="agent-handoff">You establish</strong>
-                  <small>This Wager has no prior Constrained result. Resolve one defined Side after entry.</small>
+                  <span>Coin decides · no Coin history yet</span>
+                  <strong className="agent-handoff">Decide the first Side tomorrow</strong>
+                  <small>The result remains in the Coin-decided stream.</small>
                 </div>
               ) : null}
 
@@ -1087,9 +1076,9 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
 
               {phase === "resolved" ? (
                 <div className="event-result event-result--resolved">
-                  <span>Constrained condition · Coin resolved</span>
+                  <span>Coin decided</span>
                   <SideDefinition wager={wager} side={current.side} />
-                  <small>Opposite the selected prior Side.</small>
+                  <small>Opposite the referenced Side.</small>
                 </div>
               ) : null}
             </div>
@@ -1098,29 +1087,33 @@ function FlipEvent({ dayNumber, closingDay, wagers, results, predeclaredNulls = 
 
         {phase === "settle" ? (
           <div className="event-stage event-stage--settle">
-            <span className="eyebrow">Coin</span>
-            <h2>{hasUpcomingDay ? `Day ${dayNumber}` : `Day ${closingDay?.day} recorded`}</h2>
+            <span className="eyebrow">{hasUpcomingDay ? `Tomorrow · Day ${dayNumber}` : "Ledger"}</span>
+            <h2>{hasUpcomingDay ? "Tomorrow bound" : `Day ${closingDay?.day} recorded`}</h2>
             <div className="resolution-register">
               {results.map((result) => {
                 const resultWager = result.definition || wagers.find((item) => item.code === result.code);
                 return (
                   <div key={result.code} className={`register-state ${result.side ? `register-state--${result.side.toLowerCase()}` : ""} register-state--${result.mode === "O" ? "open" : "constrained"}`}>
-                    <small>{result.code} · {result.mode === "O" ? "Open" : "Constrained"}</small>
+                    <small>{result.code} · {result.mode === "O" ? "You decide tomorrow" : result.seed ? "You decide the first Side tomorrow" : "Coin decided"}</small>
                     {result.side ? (
                       <SideDefinition wager={resultWager} side={result.side} />
-                    ) : <span className="register-state__pending">A / B · You resolve after entry</span>}
+                    ) : (
+                      <div className="register-state__choice">
+                        <WagerGeometry wager={resultWager} compact />
+                      </div>
+                    )}
                   </div>
                 );
               })}
               {predeclaredNulls.map((result) => (
                 <div key={result.code} className="register-state register-state--null">
-                  <small>{result.code} · Null before Flip</small>
+                  <small>{result.code} · Null before Coin</small>
                   <strong className="register-state__null">∅</strong>
                   <em>Coin bypassed</em>
                 </div>
               ))}
             </div>
-            <button className="event-enter" onClick={onFinished}>{hasUpcomingDay ? `Enter Day ${dayNumber}` : "Return"}</button>
+            <button className="event-enter" onClick={onFinished}>{hasUpcomingDay ? "Enter Today" : "Return"}</button>
           </div>
         ) : null}
       </div>
@@ -1132,7 +1125,7 @@ function DayWager({ wager, state, onSide, onNull, onRestore }) {
   if (state.nulled) {
     return (
       <article className={`day-wager day-wager--null ${state.predeclared ? "day-wager--predeclared" : ""}`}>
-        <WagerIdentity wager={wager} meta={state.predeclared ? "Null · before Flip" : "Null · this Day"} className="day-wager__head" />
+        <WagerIdentity wager={wager} meta={state.predeclared ? "Null before Coin" : "Null today"} className="day-wager__head" />
         <div className="null-object">
           <strong>∅</strong>
           <span>Null</span>
@@ -1150,7 +1143,7 @@ function DayWager({ wager, state, onSide, onNull, onRestore }) {
     <article className={`day-wager day-wager--${state.mode === "O" ? "open" : "constrained"}`}>
       <WagerIdentity
         wager={wager}
-        meta={state.mode === "O" ? "Open · you resolve" : state.seed ? "Constrained · you establish" : "Constrained · Coin resolved"}
+        meta={state.mode === "O" ? "You decide" : state.seed ? "No Coin history yet" : "Coin decided"}
         className="day-wager__head"
       />
 
@@ -1180,9 +1173,85 @@ function DayWager({ wager, state, onSide, onNull, onRestore }) {
       )}
 
       <button className="text-button day-wager__null" onClick={onNull}>
-        Null for this Day
+        Null today
       </button>
     </article>
+  );
+}
+
+function TodaySurface({ wagers, day, saveDay, goCoin, goWager }) {
+  if (!day) {
+    return (
+      <section className="surface surface--today">
+        <div className="empty-state">
+          <span className="eyebrow">Today</span>
+          <h1>No Day is bound</h1>
+          <p>{wagers.some((wager) => !wager.retired) ? "The next Day begins at the Coin." : "Bind a Wager before using the Coin."}</p>
+          <button className="button button--primary" onClick={wagers.some((wager) => !wager.retired) ? goCoin : goWager}>
+            {wagers.some((wager) => !wager.retired) ? "Go to Coin" : "Go to Wagers"}
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  const currentWagers = Object.entries(day.wagers)
+    .map(([code, state]) => state.definition || wagers.find((wager) => wager.code === code))
+    .filter(Boolean);
+  const remaining = unresolvedCount(day);
+
+  function write(code, update) {
+    const current = day.wagers[code];
+    if (!current) return;
+    const nextDay = {
+      ...day,
+      wagers: { ...day.wagers, [code]: update(current) },
+    };
+    haptic(10);
+    saveDay(nextDay);
+    if (reconciled(nextDay)) window.requestAnimationFrame(goCoin);
+  }
+
+  function setSide(code, side) {
+    const current = day.wagers[code];
+    if (!current || !["A", "B"].includes(side) || (!current.seed && current.mode !== "O") || current.side === side) return;
+    write(code, (state) => ({ ...state, side, nulled: false }));
+  }
+
+  function setNull(code, nulled) {
+    const current = day.wagers[code];
+    if (!current || current.predeclared || current.nulled === nulled) return;
+    write(code, (state) => ({
+      ...state,
+      nulled,
+      side: nulled && (state.mode === "O" || state.seed) ? null : state.side,
+    }));
+  }
+
+  return (
+    <section className="surface surface--today">
+      <div className="surface-heading today-heading">
+        <div>
+          <span className="eyebrow">Today</span>
+          <h1>Day {day.day}</h1>
+        </div>
+        <small>{remaining ? `${remaining} unresolved` : "Reconciled"}</small>
+      </div>
+      <p className="today-instruction">{remaining ? "Resolve each entry marked You decide. The Coin’s decisions are already fixed." : "Today is reconciled. You can still revise it until the next Coin commitment."}</p>
+      <div className="day-board day-board--plain">
+        {currentWagers.map((wager) => (
+          <DayWager
+            key={wager.code}
+            wager={wager}
+            state={day.wagers[wager.code]}
+            onSide={(side) => setSide(wager.code, side)}
+            onNull={() => setNull(wager.code, true)}
+            onRestore={() => setNull(wager.code, false)}
+          />
+        ))}
+      </div>
+      {!remaining ? <button className="button button--primary today-continue" onClick={goCoin}>Continue to Coin</button> : null}
+    </section>
   );
 }
 
@@ -1341,20 +1410,15 @@ function TossToFlip({ disabled, label, onCommit, controlRef }) {
   );
 }
 
-function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveNextNull, goWager }) {
+function CoinSurface({ wagers, ledger, day, nextNull, pendingReveal, saveNextNull, commitNight, acknowledgeReveal, goWager, goToday }) {
   const [event, setEvent] = useState(null);
+  const [commitError, setCommitError] = useState("");
   const [soundEnabled, setSoundEnabled] = useState(true);
   const flipping = useRef(false);
   const sound = useRef(null);
   const flipButton = useRef(null);
   const active = wagers.filter((wager) => !wager.retired);
-  const currentWagers = day
-    ? Object.entries(day.wagers)
-        .map(([code, state]) =>
-          state.definition || wagers.find((wager) => wager.code === code),
-        )
-        .filter(Boolean)
-    : [];
+  const needsRebind = active.filter((wager) => wager.needsRebind);
   const pending = day
     ? active.filter((wager) => {
         const bound = day.wagers[wager.code]?.definition;
@@ -1362,37 +1426,7 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
       })
     : active;
   const remaining = unresolvedCount(day);
-  const canFlip = day ? reconciled(day) : active.length > 0;
-
-  function setSide(code, side) {
-    const current = day.wagers[code];
-    if (!current || !["A", "B"].includes(side) || (!current.seed && current.mode !== "O") || current.side === side) return;
-    haptic(10);
-    saveDay({
-      ...day,
-      wagers: {
-        ...day.wagers,
-        [code]: { ...current, side, nulled: false },
-      },
-    });
-  }
-
-  function setNull(code, nulled) {
-    const current = day.wagers[code];
-    if (!current || current.predeclared || current.nulled === nulled) return;
-    haptic(8);
-    saveDay({
-      ...day,
-      wagers: {
-        ...day.wagers,
-        [code]: {
-          ...current,
-          nulled,
-          side: nulled && (current.mode === "O" || current.seed) ? null : current.side,
-        },
-      },
-    });
-  }
+  const canFlip = !needsRebind.length && (day ? reconciled(day) : active.length > 0);
 
   function setUpcomingNull(code, nulled) {
     saveNextNull((current) => {
@@ -1405,44 +1439,33 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
     });
   }
 
-  function flip() {
+  async function flip() {
     if (flipping.current || !canFlip) return;
     flipping.current = true;
+    setCommitError("");
     sound.current?.close();
     sound.current = createMechanicalSound(soundEnabled);
     const eventSound = sound.current;
     haptic([28, 24, 28]);
-    const nextLedger = day ? commitDay(day, ledger) : ledger;
-    const closingDay = day ? nextLedger.at(-1) : null;
-    const nullCodes = active.filter((wager) => nextNull[wager.code]).map((wager) => wager.code);
-    const live = active.filter((wager) => !nextNull[wager.code]);
-    const flipped = prepareDay(active.map((wager) => wager.code), nextLedger, nullCodes);
-    active.forEach((wager) => {
-      flipped[wager.code] = {
-        ...flipped[wager.code],
-        definition: snapshotWager(wager),
-      };
-    });
-    const nextNumber = nextDayNumber(nextLedger);
-    const nextDay = active.length
-      ? { day: nextNumber, date: todayISO(), wagers: flipped }
-      : null;
-
-    saveLedger(nextLedger);
-    saveDay(nextDay);
-    saveNextNull({});
-    setEvent({
-      dayNumber: nextNumber,
-      closingDay,
-      results: live.map((wager) => ({ code: wager.code, ...flipped[wager.code] })),
-      predeclaredNulls: active
-        .filter((wager) => nextNull[wager.code])
-        .map((wager) => ({ code: wager.code, definition: flipped[wager.code].definition })),
-      sound: eventSound,
-    });
+    try {
+      const night = commitAndPrepareNight({ wagers, ledger, day, nextNull });
+      await commitNight(night);
+      setEvent({
+        dayNumber: night.day?.day || nextDayNumber(night.ledger),
+        closingDay: night.closingDay,
+        results: night.results,
+        predeclaredNulls: night.predeclaredNulls,
+        sound: eventSound,
+      });
+    } catch (error) {
+      eventSound?.close();
+      sound.current = null;
+      flipping.current = false;
+      setCommitError(error instanceof Error ? error.message : "The night could not be committed.");
+    }
   }
 
-  if (!active.length && !currentWagers.length && !event) {
+  if (!active.length && !day && !event) {
     return (
       <section className="surface surface--coin">
         <div className="coin-empty">
@@ -1459,6 +1482,16 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
 
   const upcomingDayNumber = nextDayNumber(ledger, day);
   const closingOnly = Boolean(day && !active.length);
+  const resumedEvent = pendingReveal && day && !event ? {
+    dayNumber: day.day,
+    closingDay: pendingReveal.closingDay == null ? null : ledger.find((record) => record.day === pendingReveal.closingDay) || null,
+    results: Object.entries(day.wagers)
+      .filter(([, state]) => !state.predeclared)
+      .map(([code, state]) => ({ code, ...state })),
+    predeclaredNulls: Object.entries(day.wagers)
+      .filter(([, state]) => state.predeclared)
+      .map(([code, state]) => ({ code, definition: state.definition })),
+  } : null;
 
   return (
     <section className="surface surface--coin">
@@ -1474,30 +1507,29 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
 
         <div className="coin-cabinet__status">
           <span className="eyebrow">Coin</span>
-          <h1>{day ? `Day ${day.day}` : "No day recorded"}</h1>
+          <h1>{day ? `Prepare Day ${upcomingDayNumber}` : `Day ${upcomingDayNumber}`}</h1>
           {day ? (
             remaining === 0 ? (
-              <strong>Reconciled</strong>
+              <strong>Today reconciled</strong>
             ) : (
-              <strong>{remaining} unresolved</strong>
+              <strong>Resolve Today first</strong>
             )
           ) : (
             <strong>{active.length} Wager{active.length === 1 ? "" : "s"} loaded</strong>
           )}
         </div>
 
-        {day ? (
-          <div className="day-board">
-            {currentWagers.map((wager) => (
-              <DayWager
-                key={wager.code}
-                wager={wager}
-                state={day.wagers[wager.code]}
-                onSide={(side) => setSide(wager.code, side)}
-                onNull={() => setNull(wager.code, true)}
-                onRestore={() => setNull(wager.code, false)}
-              />
-            ))}
+        {remaining ? (
+          <div className="coin-blocker">
+            <p>{remaining} Wager{remaining === 1 ? " remains" : "s remain"} unresolved.</p>
+            <button className="button button--primary" onClick={goToday}>Return to Today</button>
+          </div>
+        ) : null}
+
+        {needsRebind.length ? (
+          <div className="coin-blocker coin-blocker--legacy">
+            <p>{needsRebind.map((wager) => wager.code).join(" · ")} must be rebound before the next Coin.</p>
+            <button className="button button--primary" onClick={goWager}>Go to Wagers</button>
           </div>
         ) : null}
 
@@ -1508,7 +1540,7 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
           </div>
         ) : null}
 
-        {canFlip && active.length && !event ? (
+        {canFlip && active.length && !event && !pendingReveal ? (
           <NextDayPreflight
             wagers={active}
             nextNull={nextNull}
@@ -1520,7 +1552,7 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
         <div className="flip-control">
           <p>{closingOnly ? `The Ledger receives Day ${day.day}.` : "The Coin binds the next Day."}</p>
           <TossToFlip
-            key={`${upcomingDayNumber}-${canFlip}-${closingOnly}`}
+            key={`${upcomingDayNumber}-${canFlip}-${closingOnly}-${commitError}`}
             disabled={!canFlip}
             label={canFlip
               ? closingOnly ? `Flick to record Day ${day.day}` : `Flick to Flip Day ${upcomingDayNumber}`
@@ -1528,22 +1560,25 @@ function CoinSurface({ wagers, ledger, day, nextNull, saveDay, saveLedger, saveN
             onCommit={flip}
             controlRef={flipButton}
           />
+          {commitError ? <p className="commit-error" role="alert">{commitError}</p> : null}
         </div>
       </div>
 
-      {event ? (
+      {event || resumedEvent ? (
         <FlipEvent
-          dayNumber={event.dayNumber}
-          closingDay={event.closingDay}
+          dayNumber={(event || resumedEvent).dayNumber}
+          closingDay={(event || resumedEvent).closingDay}
           wagers={wagers}
-          results={event.results}
-          predeclaredNulls={event.predeclaredNulls}
-          sound={event.sound}
+          results={(event || resumedEvent).results}
+          predeclaredNulls={(event || resumedEvent).predeclaredNulls}
+          sound={event?.sound}
+          initialPhase={resumedEvent ? "settle" : null}
           onFinished={() => {
-            event.sound?.close();
+            event?.sound?.close();
             sound.current = null;
             flipping.current = false;
             setEvent(null);
+            acknowledgeReveal();
             window.requestAnimationFrame(() => {
               const unresolvedSide = document.querySelector(".side-control");
               (unresolvedSide || flipButton.current)?.focus();
@@ -1614,7 +1649,7 @@ function LedgerSurface({ wagers, ledger }) {
                         <button
                           className={selectedWager?.code === wager.code ? "is-selected" : ""}
                           onClick={() => setSelected(wager.code)}
-                          title={wager.name}
+                          title={wager.scope}
                         >
                           {wager.code}
                         </button>
@@ -1660,7 +1695,7 @@ function LedgerSurface({ wagers, ledger }) {
             <div className="memory-panel">
               <div className="memory-panel__head">
                 <span className="eyebrow">Wager</span>
-                <h2>{selectedWager.code} · {selectedWager.name}</h2>
+                <h2>{selectedWager.code} · {selectedWager.scope}</h2>
                 <small>{structureLabel(selectedWager)}</small>
               </div>
               <div className="memory-pair">
@@ -1719,7 +1754,7 @@ function FairDistribution({ title, left, right, leftCount, total, observedInWind
   );
 }
 
-function RuleSurface({ onReset }) {
+function RuleSurface({ onReset, onClose }) {
   const [, setRunId] = useState(1);
   const simulation = SIMULATION_POLICIES.map((p) => {
     const series = simulate(p, 365);
@@ -1750,9 +1785,10 @@ function RuleSurface({ onReset }) {
     <section className="surface surface--rule">
       <div className="surface-heading">
         <div>
-          <span className="eyebrow">Rule</span>
+          <span className="eyebrow">Rules</span>
           <h1>One mechanism</h1>
         </div>
+        <button className="button button--quiet" onClick={onClose}>Close</button>
       </div>
 
       <div className="rule-stack">
@@ -1851,147 +1887,157 @@ function RuleSurface({ onReset }) {
 }
 
 const NAVIGATION = [
-  { id: "wager", label: "Wager", symbol: "◇" },
-  { id: "coin", label: "Coin", symbol: <CoinGlyph /> },
-  { id: "ledger", label: "Ledger", symbol: "≡" },
-  { id: "rule", label: "Rule", symbol: "§" },
+  { id: "wager", label: "Wagers" },
+  { id: "today", label: "Today" },
+  { id: "coin", label: "Coin" },
+  { id: "ledger", label: "Ledger" },
 ];
+
+function initialView(state) {
+  if (state.pendingReveal) return "coin";
+  if (!state.wagers.some((wager) => !wager.retired)) return "wager";
+  if (state.day && !reconciled(state.day)) return "today";
+  return "coin";
+}
 
 export default function App() {
   const [view, setView] = useState(null);
-  const [wagers, setWagers] = useState([]);
-  const [ledger, setLedger] = useState([]);
-  const [day, setDay] = useState(null);
-  const [nextNull, setNextNull] = useState({});
-  const [loaded, setLoaded] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [appState, setAppState] = useState(null);
+  const stateRef = useRef(null);
 
   useEffect(() => {
     let active = true;
     (async () => {
-      try {
-        await navigator.storage?.persist?.();
-      } catch {
-        // Optional persistence request.
+      try { await navigator.storage?.persist?.(); } catch { /* Optional. */ }
+      let state = hydrateAppState(parseStored(await storageGet(STORAGE_KEYS.state), null));
+      if (!state) {
+        const [wagers, ledger, day, nextNull] = await Promise.all([
+          storageGet(STORAGE_KEYS.legacyWagers),
+          storageGet(STORAGE_KEYS.legacyLedger),
+          storageGet(STORAGE_KEYS.legacyDay),
+          storageGet(STORAGE_KEYS.legacyNextNull),
+        ]);
+        state = migrateLegacyState({ wagers, ledger, day, nextNull }) || createEmptyAppState();
+        await storageSet(STORAGE_KEYS.state, JSON.stringify(state));
       }
-      const storedWagers = hydrateWagers(parseStored(await storageGet(STORAGE_KEYS.wagers), []));
-      const storedLedger = hydrateLedger(parseStored(await storageGet(STORAGE_KEYS.ledger), []));
-      const activeCodes = new Set(storedWagers.filter((wager) => !wager.retired).map((wager) => wager.code));
-      const storedNextNull = Object.fromEntries(
-        Object.entries(hydrateNextNull(parseStored(await storageGet(STORAGE_KEYS.nextNull), {})))
-          .filter(([code]) => activeCodes.has(code)),
-      );
-      const storedDay = snapshotDay(
-        hydrateDay(parseStored(await storageGet(STORAGE_KEYS.day), null)),
-        storedWagers,
-      );
       if (!active) return;
-      setWagers(storedWagers);
-      setLedger(storedLedger);
-      setDay(storedDay);
-      setNextNull(storedNextNull);
-      storageSet(STORAGE_KEYS.wagers, JSON.stringify(storedWagers));
-      storageSet(STORAGE_KEYS.ledger, JSON.stringify(storedLedger));
-      if (storedDay) storageSet(STORAGE_KEYS.day, JSON.stringify(storedDay));
-      else storageDelete(STORAGE_KEYS.day);
-      setView(storedWagers.some((wager) => !wager.retired) ? "coin" : "wager");
-      setLoaded(true);
+      stateRef.current = state;
+      setAppState(state);
+      setView(initialView(state));
     })();
-    return () => {
-      active = false;
+    return () => { active = false; };
+  }, []);
+
+  const replaceState = useCallback((nextOrUpdater) => {
+    const current = stateRef.current || createEmptyAppState();
+    const raw = typeof nextOrUpdater === "function" ? nextOrUpdater(current) : nextOrUpdater;
+    const canonical = hydrateAppState({ ...raw, version: 3, revision: current.revision + 1 });
+    if (!canonical) throw new TypeError("Refusing to store an invalid ATDU state");
+    if (Array.isArray(raw.wagers) && canonical.wagers.length !== raw.wagers.length) throw new TypeError("Refusing to store an invalid Wager");
+    if (Array.isArray(raw.ledger) && canonical.ledger.length !== raw.ledger.length) throw new TypeError("Refusing to store an invalid Ledger Day");
+    if (raw.day && !canonical.day) throw new TypeError("Refusing to store an invalid active Day");
+    stateRef.current = canonical;
+    setAppState(canonical);
+    void storageSet(STORAGE_KEYS.state, JSON.stringify(canonical));
+    return canonical;
+  }, []);
+
+  const saveWagers = useCallback((wagers) => replaceState((current) => {
+    const activeCodes = new Set(wagers.filter((wager) => !wager.retired).map((wager) => wager.code));
+    return {
+      ...current,
+      wagers,
+      nextNull: Object.fromEntries(Object.entries(current.nextNull).filter(([code]) => activeCodes.has(code))),
     };
+  }), [replaceState]);
+
+  const saveDay = useCallback((day) => replaceState((current) => ({ ...current, day })), [replaceState]);
+  const saveNextNull = useCallback((nextOrUpdater) => replaceState((current) => ({
+    ...current,
+    nextNull: typeof nextOrUpdater === "function" ? nextOrUpdater(current.nextNull) : nextOrUpdater,
+  })), [replaceState]);
+
+  const commitNight = useCallback(async (night) => {
+    const current = stateRef.current;
+    const next = hydrateAppState({
+      ...current,
+      ledger: night.ledger,
+      day: night.day,
+      nextNull: night.nextNull,
+      pendingReveal: night.pendingReveal,
+      revision: current.revision + 1,
+    });
+    if (!next) throw new TypeError("Refusing to commit an invalid night");
+    const persisted = await storageSet(STORAGE_KEYS.state, JSON.stringify(next));
+    if (!persisted) throw new Error("The nightly result could not be persisted");
+    stateRef.current = next;
+    setAppState(next);
   }, []);
 
-  const saveNextNull = useCallback((nextOrUpdater) => {
-    setNextNull(nextOrUpdater);
-  }, []);
-
-  useEffect(() => {
-    if (loaded) storageSet(STORAGE_KEYS.nextNull, JSON.stringify(nextNull));
-  }, [loaded, nextNull]);
-
-  const saveWagers = useCallback((next) => {
-    const canonical = hydrateWagers(next);
-    if (canonical.length !== next.length) throw new TypeError("Refusing to store an invalid Wager");
-    setWagers(canonical);
-    storageSet(STORAGE_KEYS.wagers, JSON.stringify(canonical));
-    const activeCodes = new Set(canonical.filter((wager) => !wager.retired).map((wager) => wager.code));
-    saveNextNull((current) => Object.fromEntries(
-      Object.entries(current).filter(([code]) => activeCodes.has(code)),
-    ));
-  }, [saveNextNull]);
-
-  const saveLedger = useCallback((next) => {
-    const canonical = hydrateLedger(next);
-    if (canonical.length !== next.length) throw new TypeError("Refusing to store an invalid Ledger Day");
-    setLedger(canonical);
-    storageSet(STORAGE_KEYS.ledger, JSON.stringify(canonical));
-  }, []);
-
-  const saveDay = useCallback((next) => {
-    const canonical = next ? hydrateDay(next) : null;
-    if (next && !canonical) throw new TypeError("Refusing to store an invalid active Day");
-    setDay(canonical);
-    if (canonical) storageSet(STORAGE_KEYS.day, JSON.stringify(canonical));
-    else storageDelete(STORAGE_KEYS.day);
-  }, []);
+  const acknowledgeReveal = useCallback(() => {
+    replaceState((current) => ({ ...current, pendingReveal: null }));
+    setView("today");
+  }, [replaceState]);
 
   function reset() {
-    if (!window.confirm("Erase all Wagers, the current day, and the Ledger?")) return;
-    saveWagers([]);
-    saveLedger([]);
-    saveDay(null);
-    saveNextNull({});
+    if (!window.confirm("Erase all Wagers, the current Day, and the Ledger?")) return;
+    replaceState({ ...createEmptyAppState(), revision: stateRef.current.revision + 1 });
+    setRulesOpen(false);
     setView("wager");
   }
 
-  if (!loaded) return <div className="app-loading" aria-label="Loading" />;
+  if (!appState || !view) return <div className="app-loading" aria-label="Loading" />;
+  const { wagers, ledger, day, nextNull, pendingReveal } = appState;
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <button className="brand" onClick={() => setView("coin")} aria-label="ATDU Coin">
+        <button className="brand" onClick={() => { setRulesOpen(false); setView("coin"); }} aria-label="ATDU Coin">
           <strong>ATDU</strong>
           <span>Wager · Coin · Ledger</span>
         </button>
+        <button className="rules-button" onClick={() => setRulesOpen((open) => !open)} aria-pressed={rulesOpen}>Rules</button>
       </header>
 
-      <nav className="primary-nav" aria-label="Primary objects">
+      <nav className="primary-nav" aria-label="Primary surfaces">
         {NAVIGATION.map((item) => (
           <button
             key={item.id}
-            className={view === item.id ? "is-current" : ""}
-            onClick={() => {
-              haptic(6);
-              setView(item.id);
-            }}
-            aria-current={view === item.id ? "page" : undefined}
+            className={!rulesOpen && view === item.id ? "is-current" : ""}
+            onClick={() => { haptic(6); setRulesOpen(false); setView(item.id); }}
+            aria-current={!rulesOpen && view === item.id ? "page" : undefined}
           >
-            <span>{item.symbol}</span>
             <strong>{item.label}</strong>
           </button>
         ))}
       </nav>
 
       <main className="app-main">
-        {view === "wager" ? (
-          <WagerSurface wagers={wagers} saveWagers={saveWagers} day={day} />
-        ) : null}
-        {view === "coin" ? (
-          <CoinSurface
-            wagers={wagers}
-            ledger={ledger}
-            day={day}
-            nextNull={nextNull}
-            saveDay={saveDay}
-            saveLedger={saveLedger}
-            saveNextNull={saveNextNull}
-            goWager={() => setView("wager")}
-          />
-        ) : null}
-        {view === "ledger" ? <LedgerSurface wagers={wagers} ledger={ledger} /> : null}
-        {view === "rule" ? <RuleSurface onReset={reset} /> : null}
+        {rulesOpen ? <RuleSurface onReset={reset} onClose={() => setRulesOpen(false)} /> : (
+          <>
+            {view === "wager" ? <WagerSurface wagers={wagers} saveWagers={saveWagers} day={day} /> : null}
+            {view === "today" ? (
+              <TodaySurface wagers={wagers} day={day} saveDay={saveDay} goCoin={() => setView("coin")} goWager={() => setView("wager")} />
+            ) : null}
+            {view === "coin" ? (
+              <CoinSurface
+                wagers={wagers}
+                ledger={ledger}
+                day={day}
+                nextNull={nextNull}
+                pendingReveal={pendingReveal}
+                saveNextNull={saveNextNull}
+                commitNight={commitNight}
+                acknowledgeReveal={acknowledgeReveal}
+                goWager={() => setView("wager")}
+                goToday={() => setView("today")}
+              />
+            ) : null}
+            {view === "ledger" ? <LedgerSurface wagers={wagers} ledger={ledger} /> : null}
+          </>
+        )}
       </main>
-
     </div>
   );
 }

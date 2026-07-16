@@ -1,88 +1,70 @@
 # ATDU PWA
 
-ATDU is a Progressive Web App built with React + Vite.
-It runs the ATDU rule system locally in the browser and stores wagers + ledger data on-device.
+ATDU is a local-first Progressive Web App for binding a finite set of binary Wagers, resolving one Day at a time, and retaining the exact result in an append-only Ledger.
 
-## Interaction model
+## Product surfaces
 
-ATDU has four persistent views: **Wager**, **Coin**, **Ledger**, and **Rule**. Placing or revising a Wager is a focused subflow within Wager. An upward Coin flick opens one modal mechanical sequence and returns to Coin for reconciliation; each phase can be advanced and the full sequence can be revealed immediately.
+The operational flow has four primary surfaces:
 
-The forward-facing Wager constructors are:
+- **Wagers** defines, revises, retires, and restores bounded Wagers.
+- **Today** reconciles the currently bound Day. A person resolves `You decide` entries; `Coin decided` entries arrive fixed. Either may be recorded Null when unavailable.
+- **Coin** reviews Tomorrow's availability and commits the next Day through one deliberate gesture. The result is generated and persisted before its staged reveal.
+- **Ledger** shows immutable history, newest Day first.
+
+**Rules** is a secondary utility containing the exact distributions, memory mechanism, constructor grammar, Null behavior, and convergence simulation.
+
+## Canonical data model
+
+One versioned `AppStateV3` is authoritative in local storage. It contains the current Wager definitions, bound Day, append-only Ledger, Tomorrow availability declarations, and any pending reveal receipt.
+
+A Wager stores only:
+
+```text
+code · scope · constructor · variables · revision · retired
+```
+
+Its two complete Side readings are derived from the constructor and shared variables wherever they are displayed. Active Days and Ledger records retain immutable definition snapshots, so later revisions or retirement never rewrite history.
+
+The four constructors are:
 
 - `DO X / DO NOT DO X`
 - `X THROUGH Y / X THROUGH Z`
 - `X AT MOST Y / X AT LEAST Y`
 - `X BEFORE Y / X AFTER Y`
 
-The interface supplies this grammar; the user supplies only its variables.
+Validation normalizes whitespace and Unicode, enforces bounded lengths and unique codes, requires every constructor variable, rejects identical Route terms, and verifies every hydrated or migrated boundary. Formal validity is enforced; the meaning of authored terms remains the user's responsibility.
 
-Wager validity is formal. The model normalizes authored whitespace and Unicode,
-enforces code uniqueness and shared length limits, requires every constructor
-variable, derives both Sides from the selected grammar, and rejects identical
-Route terms. It does not judge the content semantically or morally. Stored
-Wagers, active Days, and Ledger Days are sanitized again at hydration and write
-boundaries so presentation state cannot become canonical data by accident.
+Existing `atdu2-*` data migrates without rewriting the old keys. Canonical definitions are converted directly. Losslessly parseable legacy Side pairs are rebound to the grammar. Unparseable active definitions remain read-only historical snapshots and must be rebound or retired before another Coin event.
 
-## Object and lifecycle model
+## Commitment and recovery
 
-- A current Wager owns an immutable code, bounded situation, constructor, two defined Sides, revision, and active/retired status.
-- The Coin externalizes the fair environmental condition and, when Constrained, acts as agent through declared memory and involution.
-- A Day binds a definition snapshot and one generated condition to every Wager in that Day. Revising or retiring a Wager does not rewrite that bound Day.
-- Once the current Day is reconciled, upcoming availability is declared separately. A Wager set Null before Flip consumes no Coin toss and enters the next Day fixed as Null; a Wager that becomes unavailable after Flip can still be reconciled Null for that Day.
-- The Ledger is append-only. Each entry stores only Null or the compact system state; its definition snapshot preserves what A and B meant for that revision.
-- While a Day is bound, additions, revisions, restorations, and retirements queue for the next Flip boundary. Formal A/B memory persists by code; authored wording propagates only to future Day snapshots.
+At the nightly boundary, ATDU validates and writes the reconciled Day, generated Tomorrow, definition snapshots, upcoming availability, and reveal receipt as one state transition. Only then does theatrical revelation begin. Refreshing during revelation returns to the already-fixed Tomorrow Ticket; it never rerolls.
 
-## Run locally
+Null before Coin consumes no toss and creates a Null entry for Tomorrow. Null during Today handles availability that changed after commitment. Neither changes Side memory.
+
+## Run and verify
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Access from phone and computer on the same network
-
-Use Vite host mode so other devices can reach your machine:
+For a full production check:
 
 ```bash
-npm run dev:host
+npm run check
 ```
 
-Then open the printed LAN URL on your phone (same Wi-Fi).
+This runs ESLint, the unit and contract suite, and the production PWA build. Browser interaction coverage is available through `npm run test:e2e`.
 
-## Production build
+Use `npm run dev:host` or `npm run preview:host` to expose the app to another device on the same network.
 
-```bash
-npm run lint
-npm test
-npm run build
-npm run preview:host
-```
+## GitHub Pages
 
-`npm run check` runs static analysis, the complete test suite, and the production build.
+The workflow at `.github/workflows/pages.yml` builds `dist/` and deploys it when explicitly run by the repository's configured trigger. Set `VITE_BASE_PATH=/` for a custom domain or `/ATDU/` for repository Pages.
 
-## Deploy to GitHub Pages
+## Local data
 
-1. In GitHub, go to **Settings → Pages** and set **Source** to **GitHub Actions**.
-2. In **Settings → Pages → Custom domain**, set your domain to `atdu.app` (or another ATDU domain you own).
-3. Create the Actions repository variable `VITE_BASE_PATH` with the value `/`.
-4. Push to `main`.
-5. The workflow at `.github/workflows/pages.yml` builds the app and deploys `dist/` to Pages.
-
-### Base path notes (Vite)
-
-- Use `base: "/"` for custom-domain URLs like `https://atdu.app/` (no username in the URL).
-- If you deploy to repository Pages instead, set `VITE_BASE_PATH=/ATDU/` before build.
-- If the Actions variable is omitted, the workflow defaults to `/ATDU/`.
-
-## Install on iOS
-
-1. Open the live Pages URL in **Safari**.
-2. Tap **Share**.
-3. Tap **Add to Home Screen**.
-4. Launch ATDU from your Home Screen.
-
-## Data behavior
-
-- Data is stored in browser storage on that device/profile.
-- Clearing site data resets wagers and ledger for that device.
-- If persistent local storage is unavailable, ATDU falls back to in-memory storage for the current session.
+- State is stored in the current browser profile and device.
+- Clearing site data resets that local state.
+- If persistent storage is unavailable, the app falls back to memory for the current session.

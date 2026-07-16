@@ -1,3 +1,5 @@
+import { deriveSides, snapshotWager } from "./model.js";
+
 // ATDU engine — pure functions, no UI.
 // Implements the canonical two-flip specification.
 //
@@ -196,6 +198,33 @@ export function nextDayNumber(ledger, day = null) {
   return Math.max(lastRecorded, Number.isInteger(day?.day) ? day.day : 0) + 1;
 }
 
+// One irreversible nightly transaction. All semantic results are generated once
+// and returned with the Ledger commit and reveal receipt for one atomic write.
+export function commitAndPrepareNight({ wagers, ledger, day, nextNull = {} }, toss = coin, now = () => new Date().toISOString()) {
+  if (!Array.isArray(wagers) || !Array.isArray(ledger) || !nextNull || typeof nextNull !== "object") {
+    throw new TypeError("Cannot prepare an invalid nightly state");
+  }
+  const active = wagers.filter((wager) => !wager.retired);
+  if (active.some((wager) => wager.needsRebind)) throw new Error("Rebind legacy Wagers before the next Flip");
+  const nextLedger = day ? commitDay(day, ledger) : ledger;
+  const nullCodes = active.filter((wager) => nextNull[wager.code]).map((wager) => wager.code);
+  const flipped = prepareDay(active.map((wager) => wager.code), nextLedger, nullCodes, toss);
+  active.forEach((wager) => {
+    flipped[wager.code] = { ...flipped[wager.code], definition: snapshotWager(wager) };
+  });
+  const dayNumber = nextDayNumber(nextLedger, day);
+  const nextDay = active.length ? { day: dayNumber, date: now(), wagers: flipped } : null;
+  return {
+    ledger: nextLedger,
+    day: nextDay,
+    nextNull: {},
+    pendingReveal: nextDay ? { day: dayNumber, closingDay: day?.day ?? null } : null,
+    closingDay: day ? nextLedger.at(-1) : null,
+    results: active.filter((wager) => !nextNull[wager.code]).map((wager) => ({ code: wager.code, ...flipped[wager.code] })),
+    predeclaredNulls: active.filter((wager) => nextNull[wager.code]).map((wager) => ({ code: wager.code, definition: flipped[wager.code].definition })),
+  };
+}
+
 // ── Arithmetic ────────────────────────────────────────────────────────────
 // p = P(side A | Open). π = P(side A) overall.
 // π = (2 + 3p) / 7, bounded 2/7 ≤ π ≤ 5/7.
@@ -290,11 +319,12 @@ export function exportText(wagers, ledger) {
   lines.push("");
   lines.push("Wagers:");
   for (const wager of wagers) {
+    const sides = deriveSides(wager);
     lines.push(
-      `  ${wager.code}  ${wager.name}  r${wager.revision || 1}${wager.retired ? "  (retired)" : ""}`,
+      `  ${wager.code}  ${wager.scope}  r${wager.revision || 1}${wager.retired ? "  (retired)" : ""}`,
     );
-    lines.push(`      A: ${wager.a}`);
-    lines.push(`      B: ${wager.b}`);
+    lines.push(`      A: ${sides.a}`);
+    lines.push(`      B: ${sides.b}`);
   }
   lines.push("");
   lines.push("Days (newest first):");
